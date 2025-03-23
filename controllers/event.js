@@ -2,6 +2,9 @@ const Event = require("../Models/event");
 const User = require("../Models/user");
 const fs = require("fs");
 const mongoose = require("mongoose");
+const Payment = require("../Models/payment");
+const crypto = require("crypto");
+
 
 // Get all events (Public access)
 const getAllEvents = async (req, res) => {
@@ -179,15 +182,20 @@ const getMyEvents = async (req, res) => {
 
 const getMyPurchasedEvents = async (req, res) => {
   try {
-    const events = await Event.find({ attendees: req.user._id });
+    const userId = req.user.id;
+
+    // Find all payments made by the user
+    const payments = await Payment.find({ user: userId, status: "success" }).populate("event");
+
+    // Extract events from payments
+    const events = payments.map((payment) => payment.event);
+
     res.status(200).json(events);
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error fetching events", error: error.message });
+    console.error("Error fetching purchased events:", error);
+    res.status(500).json({ message: "Error fetching purchased events", error: error.message });
   }
 };
-
 const getEventAttendees = async (req, res) => {
   try {
     const eventId = req.params.id;
@@ -204,70 +212,123 @@ const getEventAttendees = async (req, res) => {
       .json({ message: "Error fetching attendees", error: error.message });
   }
 };
-const attendEvent = async (req, res) => {
+// Initiate Paystack payment
+const initiatePayment = async (req, res) => {
   try {
-    const eventId = req.params.eventId;
-    const userId = req.params.userId;
-    const { ticketCount } = req.body;
+    const { eventId } = req.params;
+    const { ticketType, quantity } = req.body;
+    const userId = req.user.id;
 
-    console.log("[DEBUG] Event ID:", eventId);
-    console.log("[DEBUG] User ID:", userId);
-    console.log("[DEBUG] Ticket Count:", ticketCount);
-
-    // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ message: "Invalid user ID" });
-    }
-
-    // Validate event ID
-    if (!mongoose.Types.ObjectId.isValid(eventId)) {
-      return res.status(400).json({ message: "Invalid event ID" });
-    }
-
-    // Find the event
     const event = await Event.findById(eventId);
-    if (!event) {
-      return res.status(404).json({ message: "Event not found" });
+    if (!event) return res.status(404).json({ message: "Event not found" });
+    if (event.soldOut) return res.status(400).json({ message: "Event is sold out" });
+
+    // Calculate total amount
+    const ticketPrice = ticketType === "vip" ? event.vipTicketPrice : event.standardTicketPrice;
+    const amount = ticketPrice * quantity;
+
+    // Initialize Paystack payment
+    const paystack = require("paystack-api")(process.env.PAYSTACK_SECRET_KEY);
+    const reference = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    const paymentData = {
+      email: req.user.email,
+      amount: amount * 100, // Convert to kobo
+      reference,
+      metadata: { eventId, userId, ticketType, quantity },
+      callback_url: "http://localhost:3000/payment-success", // Redirect to frontend success page
+    };
+
+    const response = await paystack.transaction.initialize(paymentData);
+
+    // Save payment record
+    await Payment.create({
+      user: userId,
+      event: eventId,
+      amount,
+      reference,
+      ticketType,
+      quantity,
+      status: "pending", // Set initial status to pending
+    });
+
+    res.json({ authorizationUrl: response.data.authorization_url });
+  } catch (error) {
+    console.error("Payment Initiation Error:", error);
+    res.status(500).json({ message: "Payment initiation failed", error: error.message });
+  }
+};
+
+// Verify payment manually (called by frontend after payment)
+const verifyPayment = async (req, res) => {
+  try {
+    const { reference } = req.body;
+
+    const paystack = require("paystack-api")(process.env.PAYSTACK_SECRET_KEY);
+    const verification = await paystack.transaction.verify(reference);
+
+    if (verification.data.status !== "success") {
+      return res.status(400).json({ message: "Payment failed" });
     }
 
-    // Check if event is sold out
-    if (event.soldOut) {
-      return res.status(400).json({ message: "This event is sold out" });
+    // Find the payment record
+    const payment = await Payment.findOne({ reference });
+    if (!payment) {
+      return res.status(404).json({ message: "Payment not found" });
     }
 
-    // Check if user is already registered
-    const isRegistered = event.attendees.some(
-      (attendeeId) => attendeeId.toString() === userId
-    );
+    // Update payment status
+    payment.status = "success";
+    await payment.save();
 
-    if (isRegistered) {
-      return res.status(400).json({
-        message: "User is already registered for this event",
-      });
+    // Add attendees to the event
+    const event = await Event.findById(payment.event);
+    if (event.attendees.length + payment.quantity > event.capacity) {
+      payment.status = "failed";
+      await payment.save();
+      return res.status(400).json({ message: "Event capacity exceeded" });
     }
 
-    // Add user to attendees for each ticket
-    for (let i = 0; i < ticketCount; i++) {
-      event.attendees.push(userId);
-    }
-
+    event.attendees.push(...Array(payment.quantity).fill(payment.user));
+    if (event.attendees.length >= event.capacity) event.soldOut = true;
     await event.save();
 
-    // Return updated event
-    const updatedEvent = await Event.findById(eventId)
-      .populate("attendees", "username email")
-      .populate("organizer", "username");
-
-    res.status(200).json({
-      message: "Successfully registered for the event",
-      event: updatedEvent,
-    });
+    res.json({ message: "Payment verified successfully" });
   } catch (error) {
-    console.error("[ERROR] Attendance error:", error);
-    res.status(500).json({
-      message: "Error registering for event",
-      error: error.message,
-    });
+    console.error("Payment Verification Error:", error);
+    res.status(500).json({ message: "Payment verification failed", error: error.message });
+  }
+};
+
+// Register for a free event
+const attendEvent = async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.eventId);
+    if (!event) return res.status(404).json({ message: "Event not found" });
+
+    // Check if the event is free
+    if (!event.isFree) {
+      return res.status(400).json({ message: "Use payment endpoint for paid events" });
+    }
+
+    // Check if the user is already registered
+    if (event.attendees.includes(req.user.id)) {
+      return res.status(400).json({ message: "Already registered" });
+    }
+
+    // Check if the event has available capacity
+    if (event.attendees.length >= event.capacity) {
+      return res.status(400).json({ message: "Event is sold out" });
+    }
+
+    // Add the user to the attendees list
+    event.attendees.push(req.user.id);
+    await event.save();
+
+    res.json({ message: "Registration successful" });
+  } catch (error) {
+    console.error("Attendance Error:", error);
+    res.status(500).json({ message: "Registration failed", error: error.message });
   }
 };
 
@@ -281,4 +342,6 @@ module.exports = {
   getEventAttendees,
   attendEvent,
   getMyPurchasedEvents,
+  initiatePayment,
+  verifyPayment,
 };

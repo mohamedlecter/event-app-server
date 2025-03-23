@@ -16,6 +16,9 @@ const eventSchema = new mongoose.Schema({
   vipTicketPrice: { type: Number, default: 0 },
   category: { type: String, required: true },
   tags: [{ type: String }],
+  capacity: { type: Number, default: 10 },
+  standardTicketPrice: { type: Number, default: 100 },
+  vipTicketPrice: { type: Number, default: 200 },
   organizer: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",

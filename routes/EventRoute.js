@@ -36,11 +36,10 @@ router.delete("/:id", authMiddleware, eventController.deleteEvent);
 
 router.get("/:id/attendees", eventController.getEventAttendees);
 
-// eventRoutes.js
-router.put(
-  "/:eventId/attend/:userId",
-  authMiddleware,
-  eventController.attendEvent
-);
+router.post("/:eventId/pay", authMiddleware, eventController.initiatePayment);
+
+// Update existing attendee route
+router.put("/:eventId/attend", authMiddleware, eventController.attendEvent);
+router.post("/payment/verify", eventController.verifyPayment);
 
 module.exports = router;
