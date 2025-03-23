@@ -1,7 +1,7 @@
-// eventController.js
 const Event = require("../Models/event");
+const User = require("../Models/user");
 const fs = require("fs");
-const path = require("path");
+const mongoose = require("mongoose");
 
 // Get all events (Public access)
 const getAllEvents = async (req, res) => {
@@ -168,7 +168,18 @@ const deleteEvent = async (req, res) => {
 
 const getMyEvents = async (req, res) => {
   try {
-    const events = await Event.find({ organizer: req.user.id });
+    const events = await Event.find({ organizer: req.user._id });
+    res.status(200).json(events);
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Error fetching events", error: error.message });
+  }
+};
+
+const getMyPurchasedEvents = async (req, res) => {
+  try {
+    const events = await Event.find({ attendees: req.user._id });
     res.status(200).json(events);
   } catch (error) {
     res
@@ -193,6 +204,72 @@ const getEventAttendees = async (req, res) => {
       .json({ message: "Error fetching attendees", error: error.message });
   }
 };
+const attendEvent = async (req, res) => {
+  try {
+    const eventId = req.params.eventId;
+    const userId = req.params.userId;
+    const { ticketCount } = req.body;
+
+    console.log("[DEBUG] Event ID:", eventId);
+    console.log("[DEBUG] User ID:", userId);
+    console.log("[DEBUG] Ticket Count:", ticketCount);
+
+    // Validate user ID
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: "Invalid user ID" });
+    }
+
+    // Validate event ID
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      return res.status(400).json({ message: "Invalid event ID" });
+    }
+
+    // Find the event
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    // Check if event is sold out
+    if (event.soldOut) {
+      return res.status(400).json({ message: "This event is sold out" });
+    }
+
+    // Check if user is already registered
+    const isRegistered = event.attendees.some(
+      (attendeeId) => attendeeId.toString() === userId
+    );
+
+    if (isRegistered) {
+      return res.status(400).json({
+        message: "User is already registered for this event",
+      });
+    }
+
+    // Add user to attendees for each ticket
+    for (let i = 0; i < ticketCount; i++) {
+      event.attendees.push(userId);
+    }
+
+    await event.save();
+
+    // Return updated event
+    const updatedEvent = await Event.findById(eventId)
+      .populate("attendees", "username email")
+      .populate("organizer", "username");
+
+    res.status(200).json({
+      message: "Successfully registered for the event",
+      event: updatedEvent,
+    });
+  } catch (error) {
+    console.error("[ERROR] Attendance error:", error);
+    res.status(500).json({
+      message: "Error registering for event",
+      error: error.message,
+    });
+  }
+};
 
 module.exports = {
   createEvent,
@@ -202,4 +279,6 @@ module.exports = {
   deleteEvent,
   getMyEvents,
   getEventAttendees,
+  attendEvent,
+  getMyPurchasedEvents,
 };

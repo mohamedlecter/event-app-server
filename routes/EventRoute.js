@@ -8,11 +8,17 @@ const upload = require("../config/multerConfig");
 
 // Public routes
 router.get("/", eventController.getAllEvents);
+router.get("/getMyEvents", authMiddleware, eventController.getMyEvents);
+router.get(
+  "/MyPurchasedEvents",
+  authMiddleware,
+  eventController.getMyPurchasedEvents
+);
 router.get("/:id", eventController.getEventById);
 
 // Protected routes (require authentication)
 router.post(
-  "/events",
+  "/",
   authMiddleware,
   adminMiddleware,
   upload.single("photo"), // Use Multer to handle file uploads
@@ -20,15 +26,21 @@ router.post(
 );
 
 router.put(
-  "/event/:id",
+  "/:id",
   authMiddleware,
   upload.single("photo"), // Use Multer to handle file uploads
   eventController.updateEvent
 );
 
-router.delete("/events/:id", authMiddleware, eventController.deleteEvent);
+router.delete("/:id", authMiddleware, eventController.deleteEvent);
 
-router.get("/events/:id/attendees", eventController.getEventAttendees);
-router.get("/getMyEvents", authMiddleware, eventController.getMyEvents);
+router.get("/:id/attendees", eventController.getEventAttendees);
+
+// eventRoutes.js
+router.put(
+  "/:eventId/attend/:userId",
+  authMiddleware,
+  eventController.attendEvent
+);
 
 module.exports = router;
