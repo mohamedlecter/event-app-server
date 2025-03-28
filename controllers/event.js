@@ -5,7 +5,6 @@ const mongoose = require("mongoose");
 const Payment = require("../Models/payment");
 const crypto = require("crypto");
 
-
 // Get all events (Public access)
 const getAllEvents = async (req, res) => {
   try {
@@ -179,39 +178,6 @@ const getMyEvents = async (req, res) => {
       .json({ message: "Error fetching events", error: error.message });
   }
 };
-
-const getMyPurchasedEvents = async (req, res) => {
-  try {
-    const userId = req.user.id;
-
-    // Find all payments made by the user
-    const payments = await Payment.find({ user: userId, status: "success" }).populate("event");
-
-    // Extract events from payments
-    const events = payments.map((payment) => payment.event);
-
-    res.status(200).json(events);
-  } catch (error) {
-    console.error("Error fetching purchased events:", error);
-    res.status(500).json({ message: "Error fetching purchased events", error: error.message });
-  }
-};
-const getEventAttendees = async (req, res) => {
-  try {
-    const eventId = req.params.id;
-    const event = await Event.findById(eventId).populate("attendees");
-
-    if (!event) {
-      return res.status(404).json({ message: "Event not found" });
-    }
-
-    res.status(200).json(event.attendees);
-  } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error fetching attendees", error: error.message });
-  }
-};
 // Initiate Paystack payment
 const initiatePayment = async (req, res) => {
   try {
@@ -221,10 +187,12 @@ const initiatePayment = async (req, res) => {
 
     const event = await Event.findById(eventId);
     if (!event) return res.status(404).json({ message: "Event not found" });
-    if (event.soldOut) return res.status(400).json({ message: "Event is sold out" });
+    if (event.soldOut)
+      return res.status(400).json({ message: "Event is sold out" });
 
     // Calculate total amount
-    const ticketPrice = ticketType === "vip" ? event.vipTicketPrice : event.standardTicketPrice;
+    const ticketPrice =
+      ticketType === "vip" ? event.vipTicketPrice : event.standardTicketPrice;
     const amount = ticketPrice * quantity;
 
     // Initialize Paystack payment
@@ -255,7 +223,9 @@ const initiatePayment = async (req, res) => {
     res.json({ authorizationUrl: response.data.authorization_url });
   } catch (error) {
     console.error("Payment Initiation Error:", error);
-    res.status(500).json({ message: "Payment initiation failed", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Payment initiation failed", error: error.message });
   }
 };
 
@@ -264,8 +234,12 @@ const verifyPayment = async (req, res) => {
   try {
     const { reference } = req.body;
 
+    console.log("Payment Verification Request:", reference);
+
     const paystack = require("paystack-api")(process.env.PAYSTACK_SECRET_KEY);
-    const verification = await paystack.transaction.verify(reference);
+    const verification = await paystack.transaction.verify({ reference });
+
+    console.log("Paystack Verification Response:", verification);
 
     if (verification.data.status !== "success") {
       return res.status(400).json({ message: "Payment failed" });
@@ -296,39 +270,89 @@ const verifyPayment = async (req, res) => {
     res.json({ message: "Payment verified successfully" });
   } catch (error) {
     console.error("Payment Verification Error:", error);
-    res.status(500).json({ message: "Payment verification failed", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Payment verification failed", error: error.message });
   }
 };
-
-// Register for a free event
-const attendEvent = async (req, res) => {
+const updateTicketStatus = async (req, res) => {
   try {
+    const { ticketId, status } = req.body;
+
     const event = await Event.findById(req.params.eventId);
     if (!event) return res.status(404).json({ message: "Event not found" });
 
-    // Check if the event is free
-    if (!event.isFree) {
-      return res.status(400).json({ message: "Use payment endpoint for paid events" });
+    const ticket = event.tickets.id(ticketId);
+    if (!ticket) return res.status(404).json({ message: "Ticket not found" });
+
+    ticket.status = status;
+    if (status === "scanned") {
+      ticket.scannedAt = new Date();
+      ticket.scannedBy = req.user.id;
     }
 
-    // Check if the user is already registered
-    if (event.attendees.includes(req.user.id)) {
-      return res.status(400).json({ message: "Already registered" });
-    }
-
-    // Check if the event has available capacity
-    if (event.attendees.length >= event.capacity) {
-      return res.status(400).json({ message: "Event is sold out" });
-    }
-
-    // Add the user to the attendees list
-    event.attendees.push(req.user.id);
     await event.save();
 
-    res.json({ message: "Registration successful" });
+    res.json({ message: "Ticket status updated successfully" });
   } catch (error) {
-    console.error("Attendance Error:", error);
-    res.status(500).json({ message: "Registration failed", error: error.message });
+    console.error("Ticket Status Update Error:", error);
+    res
+      .status(500)
+      .json({ message: "Ticket status update failed", error: error.message });
+  }
+};
+
+// Get all purchased events for the logged-in user
+const getMyPurchasedEvents = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    console.log("Logged-in User ID:", userId);
+
+    // Find all successful payments made by the user
+    const payments = await Payment.find({
+      user: userId,
+      status: "success",
+    }).populate("event");
+
+    // Extract unique events
+    const events = payments.map((payment) => payment.event);
+
+    res.json({ events });
+  } catch (error) {
+    console.error("Error fetching purchased events:", error);
+    res.status(500).json({
+      message: "Failed to fetch purchased events",
+      error: error.message,
+    });
+  }
+};
+
+// Get detailed info about a purchased event and its transaction
+const getPurchasedEvent = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const userId = req.user.id;
+
+    // Find the payment record for this event and user
+    const payment = await Payment.findOne({
+      user: userId,
+      event: eventId,
+      status: "success",
+    }).populate("event");
+
+    if (!payment) {
+      return res
+        .status(404)
+        .json({ message: "No purchase found for this event" });
+    }
+
+    res.json({ event: payment.event, transaction: payment });
+  } catch (error) {
+    console.error("Error fetching purchased event:", error);
+    res
+      .status(500)
+      .json({ message: "Failed to fetch event details", error: error.message });
   }
 };
 
@@ -339,9 +363,9 @@ module.exports = {
   getEventById,
   deleteEvent,
   getMyEvents,
-  getEventAttendees,
-  attendEvent,
-  getMyPurchasedEvents,
   initiatePayment,
   verifyPayment,
+  updateTicketStatus,
+  getMyPurchasedEvents,
+  getPurchasedEvent,
 };

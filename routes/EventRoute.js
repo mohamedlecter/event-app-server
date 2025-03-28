@@ -9,12 +9,6 @@ const upload = require("../config/multerConfig");
 // Public routes
 router.get("/", eventController.getAllEvents);
 router.get("/getMyEvents", authMiddleware, eventController.getMyEvents);
-router.get(
-  "/MyPurchasedEvents",
-  authMiddleware,
-  eventController.getMyPurchasedEvents
-);
-router.get("/:id", eventController.getEventById);
 
 // Protected routes (require authentication)
 router.post(
@@ -25,6 +19,30 @@ router.post(
   eventController.createEvent
 );
 
+router.post("/:eventId/pay", authMiddleware, eventController.initiatePayment);
+
+// Update existing attendee route
+router.post("/payment/verify", eventController.verifyPayment);
+
+router.put(
+  "/ticket-status",
+  authMiddleware,
+  eventController.updateTicketStatus
+);
+
+router.get(
+  "/MyPurchasedEvents",
+  authMiddleware,
+  eventController.getMyPurchasedEvents
+);
+router.get(
+  "/purchased-event/:eventId",
+  authMiddleware,
+  eventController.getPurchasedEvent
+);
+
+router.get("/:id", eventController.getEventById);
+
 router.put(
   "/:id",
   authMiddleware,
@@ -33,13 +51,5 @@ router.put(
 );
 
 router.delete("/:id", authMiddleware, eventController.deleteEvent);
-
-router.get("/:id/attendees", eventController.getEventAttendees);
-
-router.post("/:eventId/pay", authMiddleware, eventController.initiatePayment);
-
-// Update existing attendee route
-router.put("/:eventId/attend", authMiddleware, eventController.attendEvent);
-router.post("/payment/verify", eventController.verifyPayment);
 
 module.exports = router;

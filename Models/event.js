@@ -27,6 +27,18 @@ const eventSchema = new mongoose.Schema({
   attendees: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   soldOut: { type: Boolean, default: false },
   url: { type: String },
+  tickets: [
+    {
+      user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      status: {
+        type: String,
+        enum: ["not-scanned", "scanned", "used", "cancelled"],
+        default: "not-scanned",
+      },
+      scannedAt: Date,
+      scannedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    },
+  ],
 });
 
 module.exports = mongoose.model("Event", eventSchema);
