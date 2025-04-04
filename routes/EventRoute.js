@@ -2,13 +2,19 @@
 const express = require("express");
 const router = express.Router();
 const eventController = require("../controllers/event");
+const ticketController = require("../controllers/ticket");
 const authMiddleware = require("../middleware/authMiddleware");
 const adminMiddleware = require("../middleware/adminMiddleware");
 const upload = require("../config/multerConfig");
 
 // Public routes
 router.get("/", eventController.getAllEvents);
-router.get("/getMyEvents", authMiddleware, eventController.getMyEvents);
+router.get(
+  "/getMyEvents",
+  authMiddleware,
+  adminMiddleware,
+  eventController.getMyEvents
+);
 
 // Protected routes (require authentication)
 router.post(
@@ -20,23 +26,22 @@ router.post(
 );
 
 router.post("/:eventId/pay", authMiddleware, eventController.initiatePayment);
-
-// Update existing attendee route
 router.post("/payment/verify", eventController.verifyPayment);
 
 router.put(
-  "/ticket-status",
+  "/scan-ticket/:eventId",
   authMiddleware,
-  eventController.updateTicketStatus
+  adminMiddleware,
+  ticketController.scanTicket
 );
 
 router.get(
-  "/MyPurchasedEvents",
+  "/purchasedEvents",
   authMiddleware,
   eventController.getMyPurchasedEvents
 );
 router.get(
-  "/purchased-event/:eventId",
+  "/purchasedEvent/:eventId",
   authMiddleware,
   eventController.getPurchasedEvent
 );
