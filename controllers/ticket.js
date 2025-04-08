@@ -3,10 +3,11 @@ const Event = require("../Models/event");
 // Mark ticket as scanned (admin only)
 exports.scanTicket = async (req, res) => {
   try {
-    const { ticketId } = req.body;
-    const { eventId } = req.params;
+    const { eventId } = req.body;
+    const { ticketId } = req.params;
 
     const event = await Event.findById(eventId);
+    console.log(eventId, ticketId);
     if (!event) return res.status(404).json({ message: "Event not found" });
 
     const ticket = event.tickets.id(ticketId);

@@ -29,7 +29,7 @@ router.post("/:eventId/pay", authMiddleware, eventController.initiatePayment);
 router.post("/payment/verify", eventController.verifyPayment);
 
 router.put(
-  "/scan-ticket/:eventId",
+  "/scan/:ticketId",
   authMiddleware,
   adminMiddleware,
   ticketController.scanTicket
