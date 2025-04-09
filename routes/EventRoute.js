@@ -1,60 +1,27 @@
-// eventRoutes.js
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const eventController = require("../controllers/event");
-const ticketController = require("../controllers/ticket");
-const authMiddleware = require("../middleware/authMiddleware");
-const adminMiddleware = require("../middleware/adminMiddleware");
-const upload = require("../config/multerConfig");
+const eventController = require('../controllers/eventController.js');
+const authMiddleware = require('../middleware/authMiddleware.js');
+const adminMiddleware = require('../middleware/adminMiddleware.js');
+const upload = require('../config/multer');
 
-// Public routes
-router.get("/", eventController.getAllEvents);
-router.get(
-  "/getMyEvents",
-  authMiddleware,
-  adminMiddleware,
-  eventController.getMyEvents
-);
+// Public routes (no authentication required)
+router.get('/', eventController.getAllEvents);
+router.get('/:id', eventController.getEventDetails);
 
 // Protected routes (require authentication)
-router.post(
-  "/",
-  authMiddleware,
-  adminMiddleware,
-  upload.single("photo"), // Use Multer to handle file uploads
-  eventController.createEvent
-);
+router.use(authMiddleware);
 
-router.post("/:eventId/pay", authMiddleware, eventController.initiatePayment);
-router.post("/payment/verify", eventController.verifyPayment);
+// User routes
+router.post('/:eventId/pay', eventController.initiatePayment);
+router.post('/verify-payment', eventController.verifyPayment);
+router.get('/user/tickets', eventController.getUserTickets);
+router.put('/tickets/:ticketId/transfer', eventController.transferTicket);
 
-router.put(
-  "/scan/:ticketId",
-  authMiddleware,
-  adminMiddleware,
-  ticketController.scanTicket
-);
-
-router.get(
-  "/purchasedEvents",
-  authMiddleware,
-  eventController.getMyPurchasedEvents
-);
-router.get(
-  "/purchasedEvent/:eventId",
-  authMiddleware,
-  eventController.getPurchasedEvent
-);
-
-router.get("/:id", eventController.getEventById);
-
-router.put(
-  "/:id",
-  authMiddleware,
-  upload.single("photo"), // Use Multer to handle file uploads
-  eventController.updateEvent
-);
-
-router.delete("/:id", authMiddleware, eventController.deleteEvent);
+// Admin routes (require admin privileges)
+router.use(adminMiddleware);
+router.post('/', upload.single('image'), eventController.createEvent);
+router.put('/:id', upload.single('image'), eventController.updateEvent);
+router.delete('/:id', eventController.deleteEvent);
 
 module.exports = router;
