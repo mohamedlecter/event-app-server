@@ -15,7 +15,7 @@ router.get("/dashboard", adminController.getDashboardStats);
 router.get("/payments", adminController.getAllPayments);
 
 // Tickets
-router.get("/tickets/search", adminController.searchTickets);
+router.get("/tickets/:referenceId", adminController.searchTickets);
 router.put("/tickets/:ticketId/scan", adminController.scanTicket);
 
 // Event analytics

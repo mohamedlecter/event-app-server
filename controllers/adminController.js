@@ -61,12 +61,14 @@ exports.getAllPayments = async (req, res) => {
 // Search tickets by reference
 exports.searchTickets = async (req, res) => {
   try {
-    const { reference } = req.query;
-    if (!reference) {
+    const { referenceId } = req.params;
+    console.log("Reference:", referenceId); // Debugging line
+    
+    if (!referenceId) {
       return res.status(400).json({ message: "Reference is required" });
     }
 
-    const tickets = await Ticket.find({ reference: { $regex: reference, $options: "i" } })
+    const tickets = await Ticket.find({ reference: { $regex: referenceId, $options: "i" } })
       .populate("event", "title date")
       .populate("user", "name email");
 
