@@ -24,7 +24,9 @@ exports.register = async (req, res) => {
 
     res.status(201).json({ token, user: { id: user._id, name, email, role } });
   } catch (error) {
-    res.status(500).json({ message: "Registration failed", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Registration failed", error: error.message });
   }
 };
 
@@ -51,8 +53,25 @@ exports.login = async (req, res) => {
       { expiresIn: "1d" }
     );
 
-    res.json({ token, user: { id: user._id, name: user.name, email, role: user.role } });
+    res.json({
+      token,
+      user: { id: user._id, name: user.name, email, role: user.role },
+    });
   } catch (error) {
     res.status(500).json({ message: "Login failed", error: error.message });
+  }
+};
+
+exports.getCurrentUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("-password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+    res.json(user);
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Failed to fetch user.", error: err.message });
   }
 };
