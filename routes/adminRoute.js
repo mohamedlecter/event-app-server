@@ -11,6 +11,9 @@ router.use(adminMiddleware);
 // Dashboard stats
 router.get("/dashboard", adminController.getDashboardStats);
 
+// Events
+router.get("/events", adminController.fetchAdminEvents);
+
 // Payments
 router.get("/payments", adminController.getAllPayments);
 
