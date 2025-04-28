@@ -31,7 +31,9 @@ exports.fetchAdminEvents = async (req, res) => {
   try {
     const adminId = req.user.id;
 
-    const events = await Event.find({ createdBy: adminId }).sort({ createdAt: -1 });
+    const events = await Event.find({ createdBy: adminId }).sort({
+      createdAt: -1,
+    });
 
     if (!events.length) {
       return res.status(200).json([]);
@@ -40,7 +42,9 @@ exports.fetchAdminEvents = async (req, res) => {
     res.json(events);
   } catch (error) {
     console.error("Error fetching admin events:", error);
-    res.status(500).json({ message: "Failed to fetch events", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Failed to fetch events", error: error.message });
   }
 };
 
@@ -52,7 +56,9 @@ exports.getDashboardStats = async (req, res) => {
     const adminId = req.user.id;
 
     // Count total events created by admin
-    const totalEvents = await Event.countDocuments({ createdBy: new ObjectId(adminId) });
+    const totalEvents = await Event.countDocuments({
+      createdBy: new ObjectId(adminId),
+    });
 
     // Aggregate tickets sold, grouped by unique ticket to avoid duplicates
     const ticketStats = await Payment.aggregate([
@@ -150,7 +156,10 @@ exports.getDashboardStats = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching dashboard stats:", error);
-    res.status(500).json({ message: "Failed to fetch dashboard stats", error: error.message });
+    res.status(500).json({
+      message: "Failed to fetch dashboard stats",
+      error: error.message,
+    });
   }
 };
 
@@ -191,8 +200,7 @@ exports.getAllPayments = async (req, res) => {
           "userDetails.email": 1,
           "eventDetails.title": 1,
           "ticketDetails.scanned": 1,
-          "ticketDetails._id": 1, 
-
+          "ticketDetails._id": 1,
         },
       },
       { $sort: { createdAt: -1 } },
@@ -201,7 +209,9 @@ exports.getAllPayments = async (req, res) => {
     res.json(payments);
   } catch (error) {
     console.error("Error fetching payments:", error);
-    res.status(500).json({ message: "Failed to fetch payments", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Failed to fetch payments", error: error.message });
   }
 };
 
@@ -254,7 +264,9 @@ exports.searchTickets = async (req, res) => {
     res.json(tickets);
   } catch (error) {
     console.error("Ticket search failed:", error);
-    res.status(500).json({ message: "Ticket search failed", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Ticket search failed", error: error.message });
   }
 };
 
@@ -274,14 +286,18 @@ exports.scanTicket = async (req, res) => {
     ]);
 
     if (!ticket.length) {
-      return res.status(200).json([])
-      
+      return res.status(200).json([]);
     }
 
-    const ticketDoc = await Ticket.findById(ticketId).populate("event", "title date");
+    const ticketDoc = await Ticket.findById(ticketId).populate(
+      "event",
+      "title date"
+    );
 
     if (ticketDoc.status !== "success") {
-      return res.status(400).json({ message: "Only paid tickets can be scanned" });
+      return res
+        .status(400)
+        .json({ message: "Only paid tickets can be scanned" });
     }
 
     if (ticketDoc.scanned) {
@@ -296,36 +312,49 @@ exports.scanTicket = async (req, res) => {
     res.json({ message: "Ticket scanned successfully", ticket: ticketDoc });
   } catch (error) {
     console.error("Ticket scanning failed:", error);
-    res.status(500).json({ message: "Ticket scanning failed", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Ticket scanning failed", error: error.message });
   }
 };
 
 /**
  * Get analytics for a specific event (tickets remaining, revenue, payments)
  */
+
 exports.getEventAnalytics = async (req, res) => {
   try {
     const adminId = req.user.id;
     const { eventId } = req.params;
 
-    // Verify event belongs to admin
-    const event = await Event.findOne({ _id: eventId, createdBy: adminId });
-
-    if (!event) {
-      return res.status(200).json([])
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      return res.status(400).json({ message: "Invalid event ID" });
     }
 
-    const standardTicketsRemaining = event.standardTicket.quantity - event.standardTicket.sold;
+    const objectEventId = new mongoose.Types.ObjectId(eventId);
+
+    const event = await Event.findOne({
+      _id: objectEventId,
+      createdBy: adminId,
+    });
+
+    if (!event) {
+      return res.status(200).json([]);
+    }
+
+    const standardTicketsRemaining =
+      event.standardTicket.quantity - event.standardTicket.sold;
     const vipTicketsRemaining = event.vipTicket.quantity - event.vipTicket.sold;
 
-    // Get payments for this event
-    const payments = await Payment.find({ event: eventId, status: "success" })
+    const payments = await Payment.find({
+      event: objectEventId,
+      status: "success",
+    })
       .populate("user", "name email")
       .sort({ createdAt: -1 });
 
-    // Calculate revenue for this event
     const revenueResult = await Payment.aggregate([
-      { $match: { event: new ObjectId(eventId), status: "success" } },
+      { $match: { event: objectEventId, status: "success" } },
       { $group: { _id: null, total: { $sum: "$amount" } } },
     ]);
     const revenue = revenueResult[0]?.total || 0;
@@ -340,6 +369,11 @@ exports.getEventAnalytics = async (req, res) => {
     });
   } catch (error) {
     console.error("Failed to fetch event analytics:", error);
-    res.status(500).json({ message: "Failed to fetch event analytics", error: error.message });
+    res
+      .status(500)
+      .json({
+        message: "Failed to fetch event analytics",
+        error: error.message,
+      });
   }
 };
