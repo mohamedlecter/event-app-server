@@ -116,7 +116,7 @@ exports.deleteEvent = async (req, res) => {
 exports.initiatePayment = async (req, res) => {
   try {
     const { eventId } = req.params;
-    const { ticketType, quantity, recipientEmails = [] } = req.body;
+    const { ticketType, quantity, recipientMobileNumbers = [] } = req.body;
     const userId = req.user.id;
 
     const event = await Event.findById(eventId);
@@ -176,7 +176,7 @@ exports.initiatePayment = async (req, res) => {
       const ticket = new Ticket({
         event: eventId,
         user: userId,
-        recipientEmail: recipientEmails[i] || req.user.email,
+        recipientMobileNumber: recipientMobileNumbers[i] || req.user.mobileNumber,
         ticketType,
         price: event[ticketField].price,
         reference: ticketReferences[i], // Use the generated reference
@@ -334,7 +334,7 @@ exports.getUserTickets = async (req, res) => {
 exports.transferTicket = async (req, res) => {
   try {
     const { ticketId } = req.params;
-    const { recipientEmail } = req.body;
+    const { recipientMobileNumber } = req.body;
 
     const ticket = await Ticket.findById(ticketId);
     if (!ticket) {
@@ -351,7 +351,7 @@ exports.transferTicket = async (req, res) => {
         .json({ message: "Only paid tickets can be transferred" });
     }
 
-    ticket.recipientEmail = recipientEmail;
+    ticket.recipientMobileNumber = recipientMobileNumber;
     ticket.transferred == true;
     await ticket.save();
 

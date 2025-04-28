@@ -4,7 +4,9 @@ const Ticket = require("../models/Ticket");
 const Payment = require("../Models/Payment");
 const { ObjectId } = mongoose.Types;
 
-// Updated helper function with proper ObjectId creation
+/**
+ * Helper aggregation stages to filter Payments or Tickets for events created by this admin
+ */
 const getAdminEventsFilter = (adminId) => [
   {
     $lookup: {
@@ -14,9 +16,7 @@ const getAdminEventsFilter = (adminId) => [
       as: "eventDetails",
     },
   },
-  {
-    $unwind: "$eventDetails",
-  },
+  { $unwind: "$eventDetails" },
   {
     $match: {
       "eventDetails.createdBy": new ObjectId(adminId),
@@ -24,41 +24,37 @@ const getAdminEventsFilter = (adminId) => [
   },
 ];
 
+/**
+ * Fetch all events created by the logged-in admin
+ */
 exports.fetchAdminEvents = async (req, res) => {
   try {
-    const adminId = req.user.id; // Get the logged-in admin's ID from the request (authentication middleware should have set this)
+    const adminId = req.user.id;
 
-    // Fetch events created by the logged-in admin
-    const events = await Event.find({ createdBy: adminId }).sort({
-      createdAt: -1,
-    });
+    const events = await Event.find({ createdBy: adminId }).sort({ createdAt: -1 });
 
-    if (!events || events.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No events found for this admin" });
+    if (!events.length) {
+      return res.status(200).json([]);
     }
 
     res.json(events);
   } catch (error) {
-    console.error("Error fetching events for admin:", error);
-    res
-      .status(500)
-      .json({ message: "Failed to fetch events", error: error.message });
+    console.error("Error fetching admin events:", error);
+    res.status(500).json({ message: "Failed to fetch events", error: error.message });
   }
 };
 
-// Updated getDashboardStats with proper ObjectId usage
+/**
+ * Get dashboard stats for admin: tickets sold, revenue, scanned tickets, etc.
+ */
 exports.getDashboardStats = async (req, res) => {
   try {
     const adminId = req.user.id;
 
-    // Total events created by this admin
-    const totalEvents = await Event.countDocuments({
-      createdBy: new ObjectId(adminId),
-    });
+    // Count total events created by admin
+    const totalEvents = await Event.countDocuments({ createdBy: new ObjectId(adminId) });
 
-    // Ticket statistics aggregation
+    // Aggregate tickets sold, grouped by unique ticket to avoid duplicates
     const ticketStats = await Payment.aggregate([
       ...getAdminEventsFilter(adminId),
       { $match: { status: "success" } },
@@ -74,45 +70,42 @@ exports.getDashboardStats = async (req, res) => {
       { $unwind: "$ticketDetails" },
       {
         $group: {
+          _id: "$ticketDetails._id", // Group by ticket id to remove duplicates
+          ticketType: { $first: "$ticketDetails.ticketType" },
+        },
+      },
+      {
+        $group: {
           _id: null,
           totalTicketsSold: { $sum: 1 },
           standardTicketsSold: {
             $sum: {
-              $cond: [{ $eq: ["$ticketDetails.ticketType", "standard"] }, 1, 0],
+              $cond: [{ $eq: ["$ticketType", "standard"] }, 1, 0],
             },
           },
           vipTicketsSold: {
             $sum: {
-              $cond: [{ $eq: ["$ticketDetails.ticketType", "vip"] }, 1, 0],
+              $cond: [{ $eq: ["$ticketType", "vip"] }, 1, 0],
             },
           },
         },
       },
     ]);
 
-    // Total revenue
+    // Aggregate total revenue from successful payments
     const revenueResult = await Payment.aggregate([
       ...getAdminEventsFilter(adminId),
       { $match: { status: "success" } },
       { $group: { _id: null, total: { $sum: "$amount" } } },
     ]);
 
-    // Scanned tickets statistics
+    // Aggregate scanned tickets stats for admin's events
     const scannedStats = await Ticket.aggregate([
-      {
-        $lookup: {
-          from: "events",
-          localField: "event",
-          foreignField: "_id",
-          as: "eventDetails",
-        },
-      },
-      { $unwind: "$eventDetails" },
+      ...getAdminEventsFilter(adminId),
       {
         $match: {
           status: "success",
           scanned: true,
-          "eventDetails.createdBy": new ObjectId(adminId),
         },
       },
       {
@@ -133,7 +126,6 @@ exports.getDashboardStats = async (req, res) => {
       },
     ]);
 
-    // Extract results
     const stats = ticketStats[0] || {
       totalTicketsSold: 0,
       standardTicketsSold: 0,
@@ -158,20 +150,19 @@ exports.getDashboardStats = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching dashboard stats:", error);
-    res.status(500).json({
-      message: "Failed to fetch dashboard stats",
-      error: error.message,
-    });
+    res.status(500).json({ message: "Failed to fetch dashboard stats", error: error.message });
   }
 };
 
-// Get all payments for admin's events
+/**
+ * Get all payments for admin's events with user and ticket details
+ */
 exports.getAllPayments = async (req, res) => {
   try {
     const adminId = req.user.id;
 
     const payments = await Payment.aggregate([
-      ...getAdminEventsFilter(adminId), // Note the spread operator here
+      ...getAdminEventsFilter(adminId),
       {
         $lookup: {
           from: "users",
@@ -200,6 +191,8 @@ exports.getAllPayments = async (req, res) => {
           "userDetails.email": 1,
           "eventDetails.title": 1,
           "ticketDetails.scanned": 1,
+          "ticketDetails._id": 1, 
+
         },
       },
       { $sort: { createdAt: -1 } },
@@ -207,14 +200,14 @@ exports.getAllPayments = async (req, res) => {
 
     res.json(payments);
   } catch (error) {
-    res.status(500).json({
-      message: "Failed to fetch payments",
-      error: error.message,
-    });
+    console.error("Error fetching payments:", error);
+    res.status(500).json({ message: "Failed to fetch payments", error: error.message });
   }
 };
-// Search tickets by reference (admin's events only)
-// Search tickets by reference (admin's events only)
+
+/**
+ * Search tickets by reference ID within admin's events
+ */
 exports.searchTickets = async (req, res) => {
   try {
     const adminId = req.user.id;
@@ -230,7 +223,7 @@ exports.searchTickets = async (req, res) => {
           reference: { $regex: referenceId, $options: "i" },
         },
       },
-      ...getAdminEventsFilter(adminId), // Added spread operator here
+      ...getAdminEventsFilter(adminId),
       {
         $lookup: {
           from: "users",
@@ -260,100 +253,79 @@ exports.searchTickets = async (req, res) => {
 
     res.json(tickets);
   } catch (error) {
-    res.status(500).json({
-      message: "Ticket search failed",
-      error: error.message,
-    });
+    console.error("Ticket search failed:", error);
+    res.status(500).json({ message: "Ticket search failed", error: error.message });
   }
 };
 
-// Scan ticket (with admin event ownership check)
+/**
+ * Scan a ticket with validation for admin ownership and status
+ */
 exports.scanTicket = async (req, res) => {
   try {
     const adminId = req.user.id;
     const { ticketId } = req.params;
 
-    // First verify the ticket belongs to admin's event
+    // Verify ticket belongs to admin's event
     const ticket = await Ticket.aggregate([
-      { $match: { _id: mongoose.Types.ObjectId(ticketId) } },
-      getAdminEventsFilter(adminId),
+      { $match: { _id: new ObjectId(ticketId) } },
+      ...getAdminEventsFilter(adminId),
       { $limit: 1 },
     ]);
 
-    if (!ticket || ticket.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "Ticket not found or not authorized" });
+    if (!ticket.length) {
+      return res.status(200).json([])
+      
     }
 
-    const ticketDoc = await Ticket.findById(ticketId).populate(
-      "event",
-      "title date"
-    );
+    const ticketDoc = await Ticket.findById(ticketId).populate("event", "title date");
 
     if (ticketDoc.status !== "success") {
-      return res
-        .status(400)
-        .json({ message: "Only paid tickets can be scanned" });
+      return res.status(400).json({ message: "Only paid tickets can be scanned" });
     }
 
-    if (ticketDoc.scanned === true) {
+    if (ticketDoc.scanned) {
       return res.status(400).json({ message: "Ticket already scanned" });
     }
 
-    // Update ticket status to scanned
     ticketDoc.scanned = true;
     ticketDoc.scannedAt = new Date();
-    ticketDoc.scannedBy = req.user.id;
+    ticketDoc.scannedBy = adminId;
     await ticketDoc.save();
 
-    res.json({
-      message: "Ticket scanned successfully",
-      ticket: ticketDoc,
-    });
+    res.json({ message: "Ticket scanned successfully", ticket: ticketDoc });
   } catch (error) {
-    res.status(500).json({
-      message: "Ticket scanning failed",
-      error: error.message,
-    });
+    console.error("Ticket scanning failed:", error);
+    res.status(500).json({ message: "Ticket scanning failed", error: error.message });
   }
 };
 
-// Get event analytics (with admin ownership check)
+/**
+ * Get analytics for a specific event (tickets remaining, revenue, payments)
+ */
 exports.getEventAnalytics = async (req, res) => {
   try {
     const adminId = req.user.id;
     const { eventId } = req.params;
 
-    // First verify the event belongs to the admin
-    const event = await Event.findOne({
-      _id: eventId,
-      createdBy: adminId,
-    });
+    // Verify event belongs to admin
+    const event = await Event.findOne({ _id: eventId, createdBy: adminId });
 
     if (!event) {
-      return res
-        .status(404)
-        .json({ message: "Event not found or not authorized" });
+      return res.status(200).json([])
     }
 
-    const standardTicketsRemaining =
-      event.standardTicket.quantity - event.standardTicket.sold;
+    const standardTicketsRemaining = event.standardTicket.quantity - event.standardTicket.sold;
     const vipTicketsRemaining = event.vipTicket.quantity - event.vipTicket.sold;
 
     // Get payments for this event
-    const payments = await Payment.find({
-      event: eventId,
-      status: "success",
-    })
+    const payments = await Payment.find({ event: eventId, status: "success" })
       .populate("user", "name email")
       .sort({ createdAt: -1 });
 
-    // Calculate revenue
+    // Calculate revenue for this event
     const revenueResult = await Payment.aggregate([
-      {
-        $match: { event: mongoose.Types.ObjectId(eventId), status: "success" },
-      },
+      { $match: { event: new ObjectId(eventId), status: "success" } },
       { $group: { _id: null, total: { $sum: "$amount" } } },
     ]);
     const revenue = revenueResult[0]?.total || 0;
@@ -367,9 +339,7 @@ exports.getEventAnalytics = async (req, res) => {
       payments,
     });
   } catch (error) {
-    res.status(500).json({
-      message: "Failed to fetch event analytics",
-      error: error.message,
-    });
+    console.error("Failed to fetch event analytics:", error);
+    res.status(500).json({ message: "Failed to fetch event analytics", error: error.message });
   }
 };

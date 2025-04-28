@@ -11,8 +11,8 @@ const ticketSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
   },
-  recipientEmail: {
-    type: String,
+  recipientMobileNumber: {
+    type: Number,
   },
   ticketType: {
     type: String,

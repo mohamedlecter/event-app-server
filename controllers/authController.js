@@ -3,7 +3,7 @@ const User = require("../Models/User");
 
 exports.register = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, mobileNumber } = req.body;
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -12,17 +12,17 @@ exports.register = async (req, res) => {
     }
 
     // Create new user
-    const user = new User({ name, email, password, role });
+    const user = new User({ name, email, password, role, mobileNumber});
     await user.save();
 
     // Generate JWT token
     const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
+      { id: user._id, email: user.email, role: user.role, mobileNumber: user.mobileNumber },
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
 
-    res.status(201).json({ token, user: { id: user._id, name, email, role } });
+    res.status(201).json({ token, user: { id: user._id, name, email, role, mobileNumber} });
   } catch (error) {
     res
       .status(500)
@@ -48,14 +48,14 @@ exports.login = async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
+      { id: user._id, email: user.email, role: user.role, mobileNumber: user.mobileNumber },
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
 
     res.json({
       token,
-      user: { id: user._id, name: user.name, email, role: user.role },
+      user: { id: user._id, name: user.name, email, role: user.role, mobileNumber: user.mobileNumber },
     });
   } catch (error) {
     res.status(500).json({ message: "Login failed", error: error.message });
