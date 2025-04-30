@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const Event = require("../Models/Event");
-const Ticket = require("../models/Ticket");
-const Payment = require("../Models/Payment");
+const Ticket = require("../Models/Ticket");
+const Payment = require("../Models/Payments");
 const { ObjectId } = mongoose.Types;
 
 /**
