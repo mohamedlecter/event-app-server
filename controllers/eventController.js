@@ -6,9 +6,14 @@ const mongoose = require("mongoose");
 
 dotenv.config();
 
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY,{
-  apiVersion: '2023-08-16'
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2023-08-16",
 });
+// Wave Configuration
+const waveConfig = {
+  apiKey: process.env.WAVE_API_KEY,
+  apiUrl: "https://api.wave.com/v1",
+};
 
 // Create a new event (Admin only)
 exports.createEvent = async (req, res) => {
@@ -119,22 +124,60 @@ exports.deleteEvent = async (req, res) => {
       .json({ message: "Event deletion failed", error: error.message });
   }
 };
+// Helper function to create Wave checkout session
+const createWaveCheckout = async (amount, currency, reference, callbackUrl) => {
+  try {
+    const response = await axios.post(
+      `${waveConfig.apiUrl}/checkout/sessions`,
+      {
+        amount: amount.toString(),
+        currency: currency,
+        error_url: callbackUrl,
+        success_url: callbackUrl,
+        client_reference_id: reference,
+        metadata: {
+          payment_reference: reference,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${waveConfig.apiKey}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
 
+    return response.data;
+  } catch (error) {
+    console.error("Wave API Error:", error.response?.data || error.message);
+    throw new Error("Failed to create Wave checkout session");
+  }
+};
+
+// Initiate Payment
 exports.initiatePayment = async (req, res) => {
+  let mainReference;
+
   try {
     const { eventId } = req.params;
-    console.log('Received eventId:', eventId); // Add this for debugging
-    const { ticketType, quantity, recipientMobileNumbers = [] } = req.body;
+    const {
+      ticketType,
+      quantity,
+      recipientMobileNumbers = [],
+      paymentGateway = "stripe",
+    } = req.body;
     const userId = req.user.id;
 
+    // Input validation
     if (!mongoose.Types.ObjectId.isValid(eventId)) {
       return res.status(400).json({ message: "Invalid event ID" });
     }
 
     const event = await Event.findById(eventId);
     if (!event) return res.status(404).json({ message: "Event not found" });
-    if (event.soldOut)
+    if (event.soldOut) {
       return res.status(400).json({ message: "Event is sold out" });
+    }
 
     // Check ticket availability
     const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
@@ -146,40 +189,11 @@ exports.initiatePayment = async (req, res) => {
     const amount = event[ticketField].price * quantity;
 
     // Generate unique references
-    const mainReference = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    mainReference = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const ticketReferences = [];
     for (let i = 0; i < quantity; i++) {
       ticketReferences.push(`${mainReference}-TKT-${i}`);
     }
-
-    // Create Stripe checkout session
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [
-        {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: `${event.title} - ${ticketType} Ticket`,
-              description: `Purchase of ${quantity} ${ticketType} ticket(s) for ${event.title}`,
-            },
-            unit_amount: amount * 100, // Convert to cents
-          },
-          quantity: 1,
-        },
-      ],
-      mode: 'payment',
-      success_url: `http://localhost:3000/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `http://localhost:3000/events/${eventId}`,
-      client_reference_id: mainReference,
-      metadata: {
-        eventId,
-        userId,
-        ticketType,
-        quantity,
-        ticketReferences: JSON.stringify(ticketReferences),
-      },
-    });
 
     // Create payment record
     const payment = await Payment.create({
@@ -188,15 +202,17 @@ exports.initiatePayment = async (req, res) => {
       amount,
       reference: mainReference,
       status: "pending",
+      paymentGateway,
     });
 
-    // Create ticket records with individual references
+    // Create ticket records
     const tickets = [];
     for (let i = 0; i < quantity; i++) {
       const ticket = new Ticket({
         event: eventId,
         user: userId,
-        recipientMobileNumber: recipientMobileNumbers[i] || req.user.mobileNumber,
+        recipientMobileNumber:
+          recipientMobileNumbers[i] || req.user.mobileNumber,
         ticketType,
         price: event[ticketField].price,
         reference: ticketReferences[i],
@@ -211,105 +227,294 @@ exports.initiatePayment = async (req, res) => {
     payment.tickets = tickets;
     await payment.save();
 
-    res.json({ id: session.id });
+    // Process payment based on selected gateway
+    if (paymentGateway === "wave") {
+      // Create Wave checkout session
+      const waveSession = await createWaveCheckout(
+        amount,
+        "XOF", // Using XOF as shown in Wave docs
+        mainReference,
+        `${process.env.FRONTEND_URL}/payment-success?reference=${mainReference}`
+      );
+
+      return res.json({
+        id: waveSession.id,
+        paymentUrl: waveSession.payment_url || waveSession.url,
+        gateway: "wave",
+      });
+    } else {
+      // Default to Stripe
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: {
+                name: `${event.title} - ${ticketType} Ticket`,
+                description: `Purchase of ${quantity} ${ticketType} ticket(s) for ${event.title}`,
+              },
+              unit_amount: amount * 100,
+            },
+            quantity: 1,
+          },
+        ],
+        mode: "payment",
+        success_url: `${process.env.FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.FRONTEND_URL}/events/${eventId}`,
+        client_reference_id: mainReference,
+        metadata: {
+          eventId,
+          userId,
+          ticketType,
+          quantity,
+          ticketReferences: JSON.stringify(ticketReferences),
+        },
+      });
+
+      return res.json({ id: session.id, gateway: "stripe" });
+    }
   } catch (error) {
     console.error("Payment Initiation Error:", error);
-    res.status(500).json({ 
-      message: "Payment initiation failed", 
-      error: error.message 
+
+    // Clean up failed payment records if reference was created
+    if (mainReference) {
+      await Payment.deleteOne({ reference: mainReference }).catch(
+        (cleanupError) => {
+          console.error("Failed to clean up payment:", cleanupError);
+        }
+      );
+      await Ticket.deleteMany({ paymentReference: mainReference }).catch(
+        (cleanupError) => {
+          console.error("Failed to clean up tickets:", cleanupError);
+        }
+      );
+    }
+
+    res.status(500).json({
+      message: "Payment initiation failed",
+      error: error.message,
+      details: error.response?.data || undefined,
     });
   }
 };
 
-// Verify payment using Stripe
+// Verify Payment
 exports.verifyPayment = async (req, res) => {
   try {
-    const { session_id } = req.body;
-    
-    // Retrieve the Stripe session
-    const session = await stripe.checkout.sessions.retrieve(session_id);
-    const reference = session.client_reference_id;
+    const { session_id, reference, gateway } = req.body;
 
-    if (session.payment_status !== 'paid') {
-      // Update payment and tickets to failed status if payment failed
-      await Payment.findOneAndUpdate(
-        { reference },
-        { $set: { status: "failed" } }
-      );
+    if (gateway === "stripe") {
+      // Stripe verification logic
+      const session = await stripe.checkout.sessions.retrieve(session_id, {
+        expand: ["payment_intent"],
+      });
+      const paymentReference = session.client_reference_id;
 
-      await Ticket.updateMany(
-        { paymentReference: reference },
-        { $set: { status: "failed" } }
-      );
+      if (session.payment_status !== "paid") {
+        await Payment.findOneAndUpdate(
+          { reference: paymentReference },
+          { $set: { status: "failed" } }
+        );
 
-      return res.status(400).json({ message: "Payment failed" });
-    }
+        await Ticket.updateMany(
+          { paymentReference: paymentReference },
+          { $set: { status: "failed" } }
+        );
 
-    // Find the payment record
-    const payment = await Payment.findOne({ reference })
-      .populate("tickets")
-      .populate("event")
-      .populate("user", "name email");
+        return res.status(400).json({
+          message: "Payment failed",
+          details: session.payment_intent?.last_payment_error || null,
+        });
+      }
 
-    if (!payment) {
-      return res.status(404).json({ message: "Payment not found" });
-    }
+      // Find the payment record
+      const payment = await Payment.findOne({ reference: paymentReference })
+        .populate("tickets")
+        .populate("event")
+        .populate("user", "name email");
 
-    // Check if tickets would exceed event capacity
-    const ticketType = payment.tickets[0].ticketType;
-    const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
-    const event = await Event.findById(payment.event);
+      if (!payment) {
+        return res.status(404).json({ message: "Payment not found" });
+      }
 
-    if (
-      event[ticketField].sold + payment.tickets.length >
-      event[ticketField].quantity
-    ) {
-      // Revert payment and tickets if capacity would be exceeded
-      payment.status = "failed";
+      // Check if tickets would exceed event capacity
+      const ticketType = payment.tickets[0].ticketType;
+      const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
+      const event = await Event.findById(payment.event);
+
+      if (
+        event[ticketField].sold + payment.tickets.length >
+        event[ticketField].quantity
+      ) {
+        // Refund the payment if capacity is exceeded
+        try {
+          await stripe.refunds.create({
+            payment_intent: session.payment_intent.id,
+          });
+        } catch (refundError) {
+          console.error("Refund failed:", refundError);
+        }
+
+        // Update statuses to failed
+        payment.status = "refunded";
+        await payment.save();
+
+        await Ticket.updateMany(
+          { paymentReference: paymentReference },
+          { $set: { status: "failed" } }
+        );
+
+        return res
+          .status(400)
+          .json({ message: "Event capacity exceeded - payment refunded" });
+      }
+
+      // Update payment status
+      payment.status = "success";
+      payment.stripePaymentIntent = session.payment_intent.id;
       await payment.save();
 
+      // Update all related tickets
       await Ticket.updateMany(
-        { paymentReference: reference },
-        { $set: { status: "failed" } }
+        { paymentReference: paymentReference },
+        { $set: { status: "success" } }
       );
 
-      return res.status(400).json({ message: "Event capacity exceeded" });
+      // Update event ticket counts
+      await Event.findByIdAndUpdate(payment.event, {
+        $inc: { [`${ticketField}.sold`]: payment.tickets.length },
+        $set: {
+          soldOut:
+            event.standardTicket.sold +
+              (ticketField === "standardTicket" ? payment.tickets.length : 0) >=
+              event.standardTicket.quantity &&
+            event.vipTicket.sold +
+              (ticketField === "vipTicket" ? payment.tickets.length : 0) >=
+              event.vipTicket.quantity,
+        },
+      });
+
+      // Refresh payment data after updates
+      const updatedPayment = await Payment.findById(payment._id)
+        .populate("tickets")
+        .populate("event")
+        .populate("user", "name email");
+
+      return res.json({
+        message: "Stripe payment verified successfully",
+        payment: updatedPayment,
+      });
+    } else if (gateway === "wave") {
+      // Wave verification logic - direct API verification (not recommended for production)
+      const payment = await Payment.findOne({ reference })
+        .populate("tickets")
+        .populate("event")
+        .populate("user", "name email");
+
+      if (!payment) {
+        return res.status(404).json({ message: "Payment not found" });
+      }
+
+      // Verify payment with Wave API directly
+      try {
+        const waveResponse = await axios.get(
+          `${waveConfig.apiUrl}/checkout/sessions/${reference}`,
+          {
+            headers: {
+              Authorization: `Bearer ${waveConfig.apiKey}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const waveData = waveResponse.data;
+
+        // Check payment status according to Wave's API
+        if (
+          waveData.status !== "completed" &&
+          waveData.payment_status !== "paid"
+        ) {
+          payment.status = "failed";
+          await payment.save();
+          await Ticket.updateMany(
+            { paymentReference: reference },
+            { $set: { status: "failed" } }
+          );
+          return res.status(400).json({
+            message: "Wave payment not completed",
+            waveStatus: waveData.status,
+          });
+        }
+
+        // Update payment status
+        payment.status = "success";
+        payment.wavePaymentId = waveData.id;
+        payment.waveTransactionId = waveData.transaction_id;
+        await payment.save();
+
+        // Update tickets
+        await Ticket.updateMany(
+          { paymentReference: reference },
+          { $set: { status: "success" } }
+        );
+
+        // Update event ticket counts
+        const ticketType = payment.tickets[0].ticketType;
+        const ticketField =
+          ticketType === "vip" ? "vipTicket" : "standardTicket";
+        const event = await Event.findById(payment.event);
+
+        await Event.findByIdAndUpdate(payment.event, {
+          $inc: { [`${ticketField}.sold`]: payment.tickets.length },
+          $set: {
+            soldOut:
+              event.standardTicket.sold +
+                (ticketField === "standardTicket"
+                  ? payment.tickets.length
+                  : 0) >=
+                event.standardTicket.quantity &&
+              event.vipTicket.sold +
+                (ticketField === "vipTicket" ? payment.tickets.length : 0) >=
+                event.vipTicket.quantity,
+          },
+        });
+
+        const updatedPayment = await Payment.findById(payment._id)
+          .populate("tickets")
+          .populate("event")
+          .populate("user", "name email");
+
+        return res.json({
+          message: "Wave payment verified successfully",
+          payment: updatedPayment,
+        });
+      } catch (waveError) {
+        console.error(
+          "Wave verification error:",
+          waveError.response?.data || waveError.message
+        );
+
+        payment.status = "failed";
+        await payment.save();
+        await Ticket.updateMany(
+          { paymentReference: reference },
+          { $set: { status: "failed" } }
+        );
+
+        return res.status(500).json({
+          message: "Wave payment verification failed",
+          error: waveError.message,
+          details: waveError.response?.data || undefined,
+        });
+      }
+    } else {
+      return res.status(400).json({ message: "Invalid payment gateway" });
     }
-
-    // Update payment status
-    payment.status = "success";
-    await payment.save();
-
-    // Update all related tickets
-    await Ticket.updateMany(
-      { paymentReference: reference },
-      { $set: { status: "success" } }
-    );
-
-    // Update event ticket counts
-    await Event.findByIdAndUpdate(payment.event, {
-      $inc: { [`${ticketField}.sold`]: payment.tickets.length },
-      $set: {
-        soldOut:
-          event.standardTicket.sold >= event.standardTicket.quantity &&
-          event.vipTicket.sold >= event.vipTicket.quantity,
-      },
-    });
-
-    // Refresh payment data after updates
-    const updatedPayment = await Payment.findById(payment._id)
-      .populate("tickets")
-      .populate("event")
-      .populate("user", "name email");
-
-    res.json({
-      message: "Payment verified successfully",
-      payment: updatedPayment,
-    });
   } catch (error) {
     console.error("Payment Verification Error:", error);
 
-    // Mark payment and tickets as failed on error
+    // Error handling and cleanup
     try {
       const reference = req.body.reference || req.body.session_id;
       await Payment.findOneAndUpdate(
@@ -328,6 +533,7 @@ exports.verifyPayment = async (req, res) => {
     res.status(500).json({
       message: "Payment verification failed",
       error: error.message,
+      details: error.response?.data || undefined,
     });
   }
 };
