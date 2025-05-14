@@ -1,4 +1,4 @@
-const Event = require("../Models/Event");
+const Event = require("../Models/EventModel");
 const Ticket = require("../Models/Ticket");
 const Payment = require("../Models/Payments");
 const dotenv = require("dotenv");
