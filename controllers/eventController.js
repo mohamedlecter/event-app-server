@@ -302,11 +302,17 @@ exports.initiatePayment = async (req, res) => {
 // Verify Payment
 exports.verifyPayment = async (req, res) => {
   try {
-    const { session_id, reference, gateway } = req.body;
+    const { reference, gateway } = req.body;
+
+    if (!reference || !gateway) {
+      return res.status(400).json({ 
+        message: "Missing required parameters: reference and gateway" 
+      });
+    }
 
     if (gateway === "stripe") {
       // Stripe verification logic
-      const session = await stripe.checkout.sessions.retrieve(session_id, {
+      const session = await stripe.checkout.sessions.retrieve(reference, {
         expand: ["payment_intent"],
       });
       const paymentReference = session.client_reference_id;
@@ -406,7 +412,7 @@ exports.verifyPayment = async (req, res) => {
         payment: updatedPayment,
       });
     } else if (gateway === "wave") {
-      // Wave verification logic - direct API verification (not recommended for production)
+      // Wave verification logic
       const payment = await Payment.findOne({ reference })
         .populate("tickets")
         .populate("event")
@@ -516,16 +522,18 @@ exports.verifyPayment = async (req, res) => {
 
     // Error handling and cleanup
     try {
-      const reference = req.body.reference || req.body.session_id;
-      await Payment.findOneAndUpdate(
-        { reference },
-        { $set: { status: "failed" } }
-      );
+      const reference = req.body.reference;
+      if (reference) {
+        await Payment.findOneAndUpdate(
+          { reference },
+          { $set: { status: "failed" } }
+        );
 
-      await Ticket.updateMany(
-        { paymentReference: reference },
-        { $set: { status: "failed" } }
-      );
+        await Ticket.updateMany(
+          { paymentReference: reference },
+          { $set: { status: "failed" } }
+        );
+      }
     } catch (dbError) {
       console.error("Failed to update statuses on error:", dbError);
     }
