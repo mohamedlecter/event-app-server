@@ -3,12 +3,12 @@ const Ticket = require("../Models/Ticket");
 const Payment = require("../Models/Payments");
 const dotenv = require("dotenv");
 const mongoose = require("mongoose");
+const paymentService = require("../services/paymentService");
+const ticketService = require("../services/ticketService");
+const notificationService = require("../services/notificationService");
 
 dotenv.config();
 
-const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2023-08-16",
-});
 // Wave Configuration
 const waveConfig = {
   apiKey: process.env.WAVE_API_KEY,
@@ -124,35 +124,6 @@ exports.deleteEvent = async (req, res) => {
       .json({ message: "Event deletion failed", error: error.message });
   }
 };
-// Helper function to create Wave checkout session
-const createWaveCheckout = async (amount, currency, reference, callbackUrl) => {
-  try {
-    const response = await axios.post(
-      `${waveConfig.apiUrl}/checkout/sessions`,
-      {
-        amount: amount.toString(),
-        currency: currency,
-        error_url: callbackUrl,
-        success_url: callbackUrl,
-        client_reference_id: reference,
-        metadata: {
-          payment_reference: reference,
-        },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${waveConfig.apiKey}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    return response.data;
-  } catch (error) {
-    console.error("Wave API Error:", error.response?.data || error.message);
-    throw new Error("Failed to create Wave checkout session");
-  }
-};
 
 // Initiate Payment
 exports.initiatePayment = async (req, res) => {
@@ -163,12 +134,13 @@ exports.initiatePayment = async (req, res) => {
     const {
       ticketType,
       quantity,
-      recipientMobileNumbers = [],
+      recipientType,
+      recipientInfo,
       paymentGateway = "stripe",
+      metadata
     } = req.body;
     const userId = req.user.id;
 
-    // Input validation
     if (!mongoose.Types.ObjectId.isValid(eventId)) {
       return res.status(400).json({ message: "Invalid event ID" });
     }
@@ -179,21 +151,13 @@ exports.initiatePayment = async (req, res) => {
       return res.status(400).json({ message: "Event is sold out" });
     }
 
-    // Check ticket availability
     const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
     if (event[ticketField].sold + quantity > event[ticketField].quantity) {
       return res.status(400).json({ message: "Not enough tickets available" });
     }
 
-    // Calculate total amount
     const amount = event[ticketField].price * quantity;
-
-    // Generate unique references
     mainReference = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const ticketReferences = [];
-    for (let i = 0; i < quantity; i++) {
-      ticketReferences.push(`${mainReference}-TKT-${i}`);
-    }
 
     // Create payment record
     const payment = await Payment.create({
@@ -205,34 +169,27 @@ exports.initiatePayment = async (req, res) => {
       paymentGateway,
     });
 
-    // Create ticket records
-    const tickets = [];
-    for (let i = 0; i < quantity; i++) {
-      const ticket = new Ticket({
-        event: eventId,
-        user: userId,
-        recipientMobileNumber:
-          recipientMobileNumbers[i] || req.user.mobileNumber,
-        ticketType,
-        price: event[ticketField].price,
-        reference: ticketReferences[i],
-        paymentReference: mainReference,
-        status: "pending",
-      });
-      await ticket.save();
-      tickets.push(ticket._id);
-    }
+    // Create tickets with recipient information
+    const { tickets: createdTickets, ticketReferences } = await ticketService.createTickets(
+      eventId,
+      userId,
+      quantity,
+      ticketType,
+      event[ticketField].price,
+      mainReference,
+      recipientInfo,
+      recipientType
+    );
 
     // Update payment with tickets
-    payment.tickets = tickets;
+    payment.tickets = createdTickets;
     await payment.save();
 
     // Process payment based on selected gateway
     if (paymentGateway === "wave") {
-      // Create Wave checkout session
-      const waveSession = await createWaveCheckout(
+      const waveSession = await paymentService.createWaveCheckout(
         amount,
-        "XOF", // Using XOF as shown in Wave docs
+        "XOF",
         mainReference,
         `${process.env.FRONTEND_URL}/payment-success?reference=${mainReference}`
       );
@@ -243,52 +200,23 @@ exports.initiatePayment = async (req, res) => {
         gateway: "wave",
       });
     } else {
-      // Default to Stripe
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            price_data: {
-              currency: "usd",
-              product_data: {
-                name: `${event.title} - ${ticketType} Ticket`,
-                description: `Purchase of ${quantity} ${ticketType} ticket(s) for ${event.title}`,
-              },
-              unit_amount: amount * 100,
-            },
-            quantity: 1,
-          },
-        ],
-        mode: "payment",
-        success_url: `${process.env.FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.FRONTEND_URL}/events/${eventId}`,
-        client_reference_id: mainReference,
-        metadata: {
-          eventId,
-          userId,
-          ticketType,
-          quantity,
-          ticketReferences: JSON.stringify(ticketReferences),
-        },
-      });
+      const session = await paymentService.createStripeSession(
+        event,
+        ticketType,
+        quantity,
+        mainReference,
+        ticketReferences,
+        metadata
+      );
 
       return res.json({ id: session.id, gateway: "stripe" });
     }
   } catch (error) {
     console.error("Payment Initiation Error:", error);
 
-    // Clean up failed payment records if reference was created
     if (mainReference) {
-      await Payment.deleteOne({ reference: mainReference }).catch(
-        (cleanupError) => {
-          console.error("Failed to clean up payment:", cleanupError);
-        }
-      );
-      await Ticket.deleteMany({ paymentReference: mainReference }).catch(
-        (cleanupError) => {
-          console.error("Failed to clean up tickets:", cleanupError);
-        }
-      );
+      await Payment.deleteOne({ reference: mainReference }).catch(console.error);
+      await Ticket.deleteMany({ paymentReference: mainReference }).catch(console.error);
     }
 
     res.status(500).json({
@@ -310,213 +238,63 @@ exports.verifyPayment = async (req, res) => {
       });
     }
 
+    let payment, sessionData;
+
     if (gateway === "stripe") {
-      // Stripe verification logic
       const session = await stripe.checkout.sessions.retrieve(reference, {
         expand: ["payment_intent"],
       });
-      const paymentReference = session.client_reference_id;
-
-      if (session.payment_status !== "paid") {
-        await Payment.findOneAndUpdate(
-          { reference: paymentReference },
-          { $set: { status: "failed" } }
-        );
-
-        await Ticket.updateMany(
-          { paymentReference: paymentReference },
-          { $set: { status: "failed" } }
-        );
-
-        return res.status(400).json({
-          message: "Payment failed",
-          details: session.payment_intent?.last_payment_error || null,
-        });
-      }
-
-      // Find the payment record
-      const payment = await Payment.findOne({ reference: paymentReference })
-        .populate("tickets")
-        .populate("event")
-        .populate("user", "name email");
-
-      if (!payment) {
-        return res.status(404).json({ message: "Payment not found" });
-      }
-
-      // Check if tickets would exceed event capacity
-      const ticketType = payment.tickets[0].ticketType;
-      const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
-      const event = await Event.findById(payment.event);
-
-      if (
-        event[ticketField].sold + payment.tickets.length >
-        event[ticketField].quantity
-      ) {
-        // Refund the payment if capacity is exceeded
-        try {
-          await stripe.refunds.create({
-            payment_intent: session.payment_intent.id,
-          });
-        } catch (refundError) {
-          console.error("Refund failed:", refundError);
-        }
-
-        // Update statuses to failed
-        payment.status = "refunded";
-        await payment.save();
-
-        await Ticket.updateMany(
-          { paymentReference: paymentReference },
-          { $set: { status: "failed" } }
-        );
-
-        return res
-          .status(400)
-          .json({ message: "Event capacity exceeded - payment refunded" });
-      }
-
-      // Update payment status
-      payment.status = "success";
-      payment.stripePaymentIntent = session.payment_intent.id;
-      await payment.save();
-
-      // Update all related tickets
-      await Ticket.updateMany(
-        { paymentReference: paymentReference },
-        { $set: { status: "success" } }
-      );
-
-      // Update event ticket counts
-      await Event.findByIdAndUpdate(payment.event, {
-        $inc: { [`${ticketField}.sold`]: payment.tickets.length },
-        $set: {
-          soldOut:
-            event.standardTicket.sold +
-              (ticketField === "standardTicket" ? payment.tickets.length : 0) >=
-              event.standardTicket.quantity &&
-            event.vipTicket.sold +
-              (ticketField === "vipTicket" ? payment.tickets.length : 0) >=
-              event.vipTicket.quantity,
-        },
-      });
-
-      // Refresh payment data after updates
-      const updatedPayment = await Payment.findById(payment._id)
-        .populate("tickets")
-        .populate("event")
-        .populate("user", "name email");
-
-      return res.json({
-        message: "Stripe payment verified successfully",
-        payment: updatedPayment,
-      });
+      ({ payment, session } = await paymentService.verifyStripePayment(session));
+      sessionData = session;
     } else if (gateway === "wave") {
-      // Wave verification logic
-      const payment = await Payment.findOne({ reference })
-        .populate("tickets")
-        .populate("event")
-        .populate("user", "name email");
-
-      if (!payment) {
-        return res.status(404).json({ message: "Payment not found" });
-      }
-
-      // Verify payment with Wave API directly
-      try {
-        const waveResponse = await axios.get(
-          `${waveConfig.apiUrl}/checkout/sessions/${reference}`,
-          {
-            headers: {
-              Authorization: `Bearer ${waveConfig.apiKey}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        const waveData = waveResponse.data;
-
-        // Check payment status according to Wave's API
-        if (
-          waveData.status !== "completed" &&
-          waveData.payment_status !== "paid"
-        ) {
-          payment.status = "failed";
-          await payment.save();
-          await Ticket.updateMany(
-            { paymentReference: reference },
-            { $set: { status: "failed" } }
-          );
-          return res.status(400).json({
-            message: "Wave payment not completed",
-            waveStatus: waveData.status,
-          });
-        }
-
-        // Update payment status
-        payment.status = "success";
-        payment.wavePaymentId = waveData.id;
-        payment.waveTransactionId = waveData.transaction_id;
-        await payment.save();
-
-        // Update tickets
-        await Ticket.updateMany(
-          { paymentReference: reference },
-          { $set: { status: "success" } }
-        );
-
-        // Update event ticket counts
-        const ticketType = payment.tickets[0].ticketType;
-        const ticketField =
-          ticketType === "vip" ? "vipTicket" : "standardTicket";
-        const event = await Event.findById(payment.event);
-
-        await Event.findByIdAndUpdate(payment.event, {
-          $inc: { [`${ticketField}.sold`]: payment.tickets.length },
-          $set: {
-            soldOut:
-              event.standardTicket.sold +
-                (ticketField === "standardTicket"
-                  ? payment.tickets.length
-                  : 0) >=
-                event.standardTicket.quantity &&
-              event.vipTicket.sold +
-                (ticketField === "vipTicket" ? payment.tickets.length : 0) >=
-                event.vipTicket.quantity,
-          },
-        });
-
-        const updatedPayment = await Payment.findById(payment._id)
-          .populate("tickets")
-          .populate("event")
-          .populate("user", "name email");
-
-        return res.json({
-          message: "Wave payment verified successfully",
-          payment: updatedPayment,
-        });
-      } catch (waveError) {
-        console.error(
-          "Wave verification error:",
-          waveError.response?.data || waveError.message
-        );
-
-        payment.status = "failed";
-        await payment.save();
-        await Ticket.updateMany(
-          { paymentReference: reference },
-          { $set: { status: "failed" } }
-        );
-
-        return res.status(500).json({
-          message: "Wave payment verification failed",
-          error: waveError.message,
-          details: waveError.response?.data || undefined,
-        });
-      }
+      ({ payment, waveData: sessionData } = await paymentService.verifyWavePayment(reference));
     } else {
       return res.status(400).json({ message: "Invalid payment gateway" });
     }
+
+    // Update payment status
+    payment.status = "success";
+    if (gateway === "stripe") {
+      payment.stripePaymentIntent = sessionData.payment_intent.id;
+    } else {
+      payment.wavePaymentId = sessionData.id;
+      payment.waveTransactionId = sessionData.transaction_id;
+    }
+    await payment.save();
+
+    // Update tickets
+    await Ticket.updateMany(
+      { paymentReference: payment.reference },
+      { $set: { status: "success" } }
+    );
+
+    // Update event ticket counts
+    const ticketType = payment.tickets[0].ticketType;
+    const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
+    const event = await Event.findById(payment.event);
+
+    await Event.findByIdAndUpdate(payment.event, {
+      $inc: { [`${ticketField}.sold`]: payment.tickets.length },
+      $set: {
+        soldOut:
+          event.standardTicket.sold +
+            (ticketField === "standardTicket" ? payment.tickets.length : 0) >=
+            event.standardTicket.quantity &&
+          event.vipTicket.sold +
+            (ticketField === "vipTicket" ? payment.tickets.length : 0) >=
+            event.vipTicket.quantity,
+      },
+    });
+
+    const updatedPayment = await Payment.findById(payment._id)
+      .populate("tickets")
+      .populate("event")
+      .populate("user", "name email");
+
+    return res.json({
+      message: `${gateway} payment verified successfully`,
+      payment: updatedPayment,
+    });
   } catch (error) {
     console.error("Payment Verification Error:", error);
 
@@ -545,12 +323,11 @@ exports.verifyPayment = async (req, res) => {
     });
   }
 };
+
 // Get user's tickets
 exports.getUserTickets = async (req, res) => {
   try {
-    const tickets = await Ticket.find({ user: req.user.id })
-      .populate("event")
-      .sort({ createdAt: -1 });
+    const tickets = await ticketService.getUserTickets(req.user.id);
     res.json(tickets);
   } catch (error) {
     res
@@ -559,35 +336,82 @@ exports.getUserTickets = async (req, res) => {
   }
 };
 
-// Transfer ticket to another user
+// Transfer ticket
 exports.transferTicket = async (req, res) => {
   try {
     const { ticketId } = req.params;
-    const { recipientMobileNumber } = req.body;
+    const { recipientType, recipientValue, recipientName } = req.body;
 
-    const ticket = await Ticket.findById(ticketId);
-    if (!ticket) {
-      return res.status(404).json({ message: "Ticket not found" });
-    }
+    const result = await ticketService.transferTicket(ticketId, req.user.id, {
+      recipientType,
+      recipientValue,
+      recipientName
+    });
 
-    if (ticket.user.toString() !== req.user.id) {
-      return res.status(403).json({ message: "You don't own this ticket" });
-    }
+    // Send notification
+    await notificationService.sendTransferNotification(ticketId, {
+      recipientType,
+      recipientValue
+    });
 
-    if (ticket.status !== "success") {
-      return res
-        .status(400)
-        .json({ message: "Only paid tickets can be transferred" });
-    }
-
-    ticket.recipientMobileNumber = recipientMobileNumber;
-    ticket.transferred == true;
-    await ticket.save();
-
-    res.json({ message: "Ticket transferred successfully", ticket });
+    res.json({ 
+      message: "Ticket transferred successfully", 
+      ...result
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Ticket transfer failed", error: error.message });
+    res.status(500).json({ 
+      message: "Ticket transfer failed", 
+      error: error.message 
+    });
   }
 };
+
+// Get transfer history
+exports.getTransferHistory = async (req, res) => {
+  try {
+    const history = await ticketService.getTransferHistory(req.params.ticketId, req.user.id);
+    res.json(history);
+  } catch (error) {
+    res.status(500).json({ 
+      message: "Failed to fetch transfer history", 
+      error: error.message 
+    });
+  }
+};
+
+// Cancel transfer
+exports.cancelTransfer = async (req, res) => {
+  try {
+    const ticket = await ticketService.cancelTransfer(req.params.ticketId, req.user.id);
+    res.json({ 
+      message: "Transfer cancelled successfully",
+      ticket
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      message: "Failed to cancel transfer", 
+      error: error.message 
+    });
+  }
+};
+
+// Send transfer notification
+exports.sendTransferNotification = async (req, res) => {
+  try {
+    const { ticketId, recipientType, recipientValue } = req.body;
+    const notificationData = await notificationService.sendTransferNotification(ticketId, {
+      recipientType,
+      recipientValue
+    });
+
+    res.json({ 
+      message: "Notification sent successfully",
+      notificationData
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      message: "Failed to send notification", 
+      error: error.message 
+    });
+  }
+}; 

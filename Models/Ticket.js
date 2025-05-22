@@ -1,5 +1,4 @@
 const mongoose = require("mongoose");
-const transfer = require("paystack-api/resources/transfer");
 
 const ticketSchema = new mongoose.Schema({
   event: {
@@ -11,8 +10,17 @@ const ticketSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
   },
-  recipientMobileNumber: {
-    type: Number,
+  recipientInfo: {
+    type: {
+      type: String,
+      enum: ['mobile', 'email'],
+      required: true
+    },
+    value: {
+      type: String,
+      required: true
+    },
+    name: String
   },
   ticketType: {
     type: String,
@@ -23,18 +31,18 @@ const ticketSchema = new mongoose.Schema({
     type: Number,
     required: true,
   },
-  reference: {  // Unique identifier for the ticket
+  reference: {
     type: String,
     required: true,
     unique: true,
   },
-  paymentReference: {  // Links to the parent payment
+  paymentReference: {
     type: String,
     required: true,
   },
   status: {
     type: String,
-    enum: ["pending", "success", "failed",],
+    enum: ["pending", "success", "failed"],
     default: "pending",
   },
   scanned: {
@@ -56,7 +64,24 @@ const ticketSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
-
+  transferHistory: [{
+    from: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    to: {
+      type: {
+        type: String,
+        enum: ['mobile', 'email'],
+      },
+      value: String,
+      name: String,
+    },
+    transferredAt: {
+      type: Date,
+      default: Date.now,
+    }
+  }]
 });
 
-module.exports = mongoose.model("Ticket", ticketSchema);
+module.exports = mongoose.model("Ticket", ticketSchema); 
