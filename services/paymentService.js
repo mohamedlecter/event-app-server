@@ -81,8 +81,8 @@ const createStripeSession = async (event, ticketType, quantity, mainReference, t
       },
     ],
     mode: "payment",
-    success_url: `http://3.107.8.204:4000/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `http://3.107.8.204:4000/events/${event._id}`,
+    success_url: `http://3.107.8.204/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `http://3.107.8.204/events/${event._id}`,
     client_reference_id: mainReference,
     metadata: stripeMetadata,
   });
