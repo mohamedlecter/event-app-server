@@ -30,33 +30,100 @@ exports.createEvent = async (req, res) => {
       vipQuantity,
       date,
       category,
+      image
     } = req.body;
+
+    // Validate required fields
+    if (!title || !country || !city || !standardPrice || !standardQuantity || 
+        !vipPrice || !vipQuantity || !date || !category) {
+      return res.status(400).json({
+        message: "Missing required fields",
+        required: {
+          title: "Event title",
+          country: "Country",
+          city: "City",
+          standardPrice: "Standard ticket price",
+          standardQuantity: "Standard ticket quantity",
+          vipPrice: "VIP ticket price",
+          vipQuantity: "VIP ticket quantity",
+          date: "Event date",
+          category: "Event category"
+        }
+      });
+    }
+
+    // Validate category
+    const validCategories = ["music", "sports", "art", "food", "business", "technology", "other"];
+    if (!validCategories.includes(category.toLowerCase())) {
+      return res.status(400).json({
+        message: "Invalid category",
+        validCategories
+      });
+    }
+
+    // Validate prices and quantities
+    if (standardPrice <= 0 || vipPrice <= 0) {
+      return res.status(400).json({
+        message: "Prices must be greater than 0"
+      });
+    }
+
+    if (standardQuantity <= 0 || vipQuantity <= 0) {
+      return res.status(400).json({
+        message: "Quantities must be greater than 0"
+      });
+    }
+
+    // Validate date
+    const eventDate = new Date(date);
+    if (isNaN(eventDate.getTime())) {
+      return res.status(400).json({
+        message: "Invalid date format"
+      });
+    }
+
+    if (eventDate < new Date()) {
+      return res.status(400).json({
+        message: "Event date cannot be in the past"
+      });
+    }
 
     const event = new Event({
       title,
       description,
-      location: { country, city },
+      location: { 
+        country, 
+        city 
+      },
       standardTicket: {
-        price: standardPrice,
-        quantity: standardQuantity,
+        price: Number(standardPrice),
+        quantity: Number(standardQuantity),
+        sold: 0
       },
       vipTicket: {
-        price: vipPrice,
-        quantity: vipQuantity,
+        price: Number(vipPrice),
+        quantity: Number(vipQuantity),
+        sold: 0
       },
-      date,
-      category,
+      date: eventDate,
+      category: category.toLowerCase(),
       createdBy: req.user.id,
-      image: req.file ? req.file.path : undefined,
+      image: req.file ? req.file.path : image || undefined,
+      soldOut: false
     });
 
     await event.save();
 
-    res.status(201).json(event);
+    res.status(201).json({
+      message: "Event created successfully",
+      event
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Event creation failed", error: error.message });
+    console.error("Event Creation Error:", error);
+    res.status(500).json({ 
+      message: "Event creation failed", 
+      error: error.message 
+    });
   }
 };
 
