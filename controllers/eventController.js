@@ -9,6 +9,7 @@ const notificationService = require("../services/notificationService");
 
 dotenv.config();
 
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 // Wave Configuration
 const waveConfig = {
   apiKey: process.env.WAVE_API_KEY,
@@ -189,7 +190,7 @@ exports.initiatePayment = async (req, res) => {
     if (paymentGateway === "wave") {
       const waveSession = await paymentService.createWaveCheckout(
         amount,
-        "XOF",
+        "GMD",
         mainReference,
         `${process.env.FRONTEND_URL}/payment-success?reference=${mainReference}`
       );
@@ -238,16 +239,20 @@ exports.verifyPayment = async (req, res) => {
       });
     }
 
-    let payment, sessionData;
+    let payment;
+    let sessionData;
 
     if (gateway === "stripe") {
       const session = await stripe.checkout.sessions.retrieve(reference, {
         expand: ["payment_intent"],
       });
-      ({ payment, session } = await paymentService.verifyStripePayment(session));
-      sessionData = session;
+      const result = await paymentService.verifyStripePayment(session);
+      payment = result.payment;
+      sessionData = result.session;
     } else if (gateway === "wave") {
-      ({ payment, waveData: sessionData } = await paymentService.verifyWavePayment(reference));
+      const result = await paymentService.verifyWavePayment(reference);
+      payment = result.payment;
+      sessionData = result.waveData;
     } else {
       return res.status(400).json({ message: "Invalid payment gateway" });
     }
