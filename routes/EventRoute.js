@@ -8,6 +8,7 @@ const upload = require('../config/multer');
 
 // Public routes (no authentication required)
 router.get('/', eventController.getAllEvents);
+router.get('/categories', eventController.getEventCategories);
 router.get('/:id', eventController.getEventDetails);
 
 // Protected routes (require authentication)

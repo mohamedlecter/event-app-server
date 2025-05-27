@@ -486,4 +486,29 @@ exports.sendTransferNotification = async (req, res) => {
       error: error.message 
     });
   }
+};
+
+// Get event categories
+exports.getEventCategories = async (req, res) => {
+  try {
+    const categories = [
+      "music",
+      "sports",
+      "art",
+      "food",
+      "business",
+      "technology",
+      "other"
+    ];
+    
+    res.json({
+      categories,
+      count: categories.length
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      message: "Failed to fetch categories", 
+      error: error.message 
+    });
+  }
 }; 
