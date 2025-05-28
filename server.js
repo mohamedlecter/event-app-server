@@ -78,7 +78,19 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // CORS configuration
 const corsOptions = {
-  origin: process.env.NODE_ENV === "production" ? process.env.ALLOWED_ORIGINS?.split(",") : "*",
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      "https://e-tickets.online",
+      "http://localhost:3000" 
+    ];
+
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization"],
 };
