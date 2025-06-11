@@ -40,6 +40,7 @@ const validatePaymentInput = (data) => {
       })
     ).required(),
     paymentGateway: Joi.string().valid('stripe', 'wave').default('stripe'),
+    currency: Joi.string().valid('USD', 'XOF', 'GMD').default('GMD'),
     metadata: Joi.object({
       eventId: Joi.string().required(),
       eventTitle: Joi.string(),

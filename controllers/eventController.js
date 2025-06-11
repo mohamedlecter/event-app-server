@@ -205,6 +205,7 @@ exports.initiatePayment = async (req, res) => {
       recipientType,
       recipientInfo,
       paymentGateway = "stripe",
+      currency = "GMD",
       metadata
     } = req.body;
     const userId = req.user.id;
@@ -235,6 +236,7 @@ exports.initiatePayment = async (req, res) => {
       reference: mainReference,
       status: "pending",
       paymentGateway,
+      currency,
     });
 
     // Create tickets with recipient information
@@ -257,7 +259,7 @@ exports.initiatePayment = async (req, res) => {
     if (paymentGateway === "wave") {
       const waveSession = await paymentService.createWaveCheckout(
         amount,
-        "GMD",
+        currency,
         mainReference,
         `${process.env.FRONTEND_URL}/payment-success?reference=${mainReference}`
       );
@@ -266,6 +268,7 @@ exports.initiatePayment = async (req, res) => {
         id: waveSession.id,
         paymentUrl: waveSession.payment_url || waveSession.url,
         gateway: "wave",
+        reference: mainReference
       });
     } else {
       const session = await paymentService.createStripeSession(
@@ -277,7 +280,11 @@ exports.initiatePayment = async (req, res) => {
         metadata
       );
 
-      return res.json({ id: session.id, gateway: "stripe" });
+      return res.json({ 
+        id: session.id, 
+        gateway: "stripe",
+        reference: mainReference
+      });
     }
   } catch (error) {
     console.error("Payment Initiation Error:", error);
@@ -320,6 +327,16 @@ exports.verifyPayment = async (req, res) => {
       const result = await paymentService.verifyWavePayment(reference);
       payment = result.payment;
       sessionData = result.waveData;
+
+      // If payment is still pending, return appropriate message
+      if (result.message) {
+        return res.json({
+          message: result.message,
+          payment: result.payment,
+          status: result.payment.status,
+          waveData: result.waveData
+        });
+      }
     } else {
       return res.status(400).json({ message: "Invalid payment gateway" });
     }
@@ -328,9 +345,11 @@ exports.verifyPayment = async (req, res) => {
     payment.status = "success";
     if (gateway === "stripe") {
       payment.stripePaymentIntent = sessionData.payment_intent.id;
-    } else {
+    } else if (gateway === "wave") {
+      // Update Wave-specific fields
       payment.wavePaymentId = sessionData.id;
       payment.waveTransactionId = sessionData.transaction_id;
+      payment.waveStatus = sessionData.payment_status;
     }
     await payment.save();
 
@@ -366,6 +385,7 @@ exports.verifyPayment = async (req, res) => {
     return res.json({
       message: `${gateway} payment verified successfully`,
       payment: updatedPayment,
+      waveData: gateway === "wave" ? sessionData : undefined
     });
   } catch (error) {
     console.error("Payment Verification Error:", error);

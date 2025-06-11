@@ -31,10 +31,33 @@ const paymentSchema = new mongoose.Schema({
     enum: ["pending", "success", "failed"],
     default: "pending",
   },
+  paymentGateway: {
+    type: String,
+    enum: ["stripe", "wave"],
+    required: true,
+  },
+  waveSessionId: String,
+  wavePaymentId: String,
+  waveTransactionId: String,
+  waveStatus: String,
+  stripePaymentIntent: String,
+  currency: {
+    type: String,
+    enum: ["USD", "XOF", "GMD", "EUR"],
+    default: "GMD",
+  },
   createdAt: {
     type: Date,
     default: Date.now,
   },
+  updatedAt: {
+    type: Date,
+    default: Date.now,
+  },
+  lastStatusCheck: {
+    type: Date,
+    default: Date.now,
+  }
 });
 
 module.exports = mongoose.model("Payment", paymentSchema);
