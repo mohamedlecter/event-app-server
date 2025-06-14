@@ -40,6 +40,10 @@ const ticketSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  qrCode: {
+    data: String,
+    generatedAt: Date
+  },
   status: {
     type: String,
     enum: ["pending", "success", "failed"],

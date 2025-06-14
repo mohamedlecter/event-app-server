@@ -1,6 +1,7 @@
 const Ticket = require("../Models/Ticket");
 const User = require("../Models/Users");
 const mongoose = require("mongoose");
+const qrCodeService = require("./qrCodeService");
 
 const createTickets = async (eventId, userId, quantity, ticketType, price, mainReference, recipientInfo, recipientType) => {
   const tickets = [];
@@ -192,10 +193,30 @@ const getTransferHistory = async (ticketId, userId) => {
   return ticket.transferHistory || [];
 };
 
+// Add new function to generate QR code for a ticket
+const generateTicketQR = async (ticketId) => {
+  const ticket = await Ticket.findById(ticketId);
+  if (!ticket) {
+    throw new Error("Ticket not found");
+  }
+
+  if (ticket.status !== "success") {
+    throw new Error("QR code can only be generated for paid tickets");
+  }
+
+  const qrCode = await qrCodeService.generateTicketQRCode(ticket);
+  
+  ticket.qrCode = qrCode;
+  await ticket.save();
+
+  return qrCode;
+};
+
 module.exports = {
   createTickets,
   transferTicket,
   cancelTransfer,
   getUserTickets,
   getTransferHistory,
+  generateTicketQR
 }; 

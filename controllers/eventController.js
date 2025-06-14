@@ -353,26 +353,30 @@ exports.verifyPayment = async (req, res) => {
     }
     await payment.save();
 
-    // Update tickets
-    await Ticket.updateMany(
-      { paymentReference: payment.reference },
-      { $set: { status: "success" } }
-    );
+    // Update tickets and generate QR codes
+    const tickets = await Ticket.find({ paymentReference: payment.reference });
+    for (const ticket of tickets) {
+      ticket.status = "success";
+      await ticket.save();
+      
+      // Generate QR code for each ticket
+      await ticketService.generateTicketQR(ticket._id);
+    }
 
     // Update event ticket counts
-    const ticketType = payment.tickets[0].ticketType;
+    const ticketType = tickets[0].ticketType;
     const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
     const event = await Event.findById(payment.event);
 
     await Event.findByIdAndUpdate(payment.event, {
-      $inc: { [`${ticketField}.sold`]: payment.tickets.length },
+      $inc: { [`${ticketField}.sold`]: tickets.length },
       $set: {
         soldOut:
           event.standardTicket.sold +
-            (ticketField === "standardTicket" ? payment.tickets.length : 0) >=
+            (ticketField === "standardTicket" ? tickets.length : 0) >=
             event.standardTicket.quantity &&
           event.vipTicket.sold +
-            (ticketField === "vipTicket" ? payment.tickets.length : 0) >=
+            (ticketField === "vipTicket" ? tickets.length : 0) >=
             event.vipTicket.quantity,
       },
     });

@@ -3,6 +3,7 @@ const Event = require("../Models/EventModel");
 const Ticket = require("../Models/Ticket");
 const Payment = require("../Models/Payments");
 const { ObjectId } = mongoose.Types;
+const qrCodeService = require("../services/qrCodeService");
 
 /**
  * Helper aggregation stages to filter Payments or Tickets for events created by this admin
@@ -276,45 +277,100 @@ exports.searchTickets = async (req, res) => {
 exports.scanTicket = async (req, res) => {
   try {
     const adminId = req.user.id;
-    const { ticketId } = req.params;
+    const { ticketId, qrData } = req.body;
 
-    // Verify ticket belongs to admin's event
-    const ticket = await Ticket.aggregate([
-      { $match: { _id: new ObjectId(ticketId) } },
-      ...getAdminEventsFilter(adminId),
-      { $limit: 1 },
-    ]);
+    let ticket;
+    
+    // If QR data is provided, verify it first
+    if (qrData) {
+      try {
+        const verifiedData = qrCodeService.verifyQRCode(qrData);
+        ticket = await Ticket.findById(verifiedData.ticketId);
+      } catch (error) {
+        return res.status(400).json({ 
+          message: "Invalid QR code", 
+          error: error.message 
+        });
+      }
+    } else if (ticketId) {
+      // Verify ticket belongs to admin's event
+      const ticketResult = await Ticket.aggregate([
+        { $match: { _id: new ObjectId(ticketId) } },
+        ...getAdminEventsFilter(adminId),
+        { $limit: 1 },
+      ]);
 
-    if (!ticket.length) {
-      return res.status(200).json([]);
+      if (!ticketResult.length) {
+        return res.status(404).json({ message: "Ticket not found or not authorized" });
+      }
+
+      ticket = await Ticket.findById(ticketId).populate(
+        "event",
+        "title date"
+      );
+    } else {
+      return res.status(400).json({ message: "Either ticketId or qrData is required" });
     }
 
-    const ticketDoc = await Ticket.findById(ticketId).populate(
-      "event",
-      "title date"
-    );
-
-    if (ticketDoc.status !== "success") {
+    // Check ticket status
+    if (ticket.status !== "success") {
       return res
         .status(400)
-        .json({ message: "Only paid tickets can be scanned" });
+        .json({ 
+          message: "Only paid tickets can be scanned",
+          ticketStatus: ticket.status
+        });
     }
 
-    if (ticketDoc.scanned) {
-      return res.status(400).json({ message: "Ticket already scanned" });
+    // Check if ticket is already scanned
+    if (ticket.scanned) {
+      return res.status(400).json({ 
+        message: "Ticket already scanned",
+        scannedAt: ticket.scannedAt,
+        scannedBy: ticket.scannedBy,
+        ticketId: ticket._id,
+        reference: ticket.reference
+      });
     }
 
-    ticketDoc.scanned = true;
-    ticketDoc.scannedAt = new Date();
-    ticketDoc.scannedBy = adminId;
-    await ticketDoc.save();
+    // Check if the event date has passed
+    const eventDate = new Date(ticket.event.date);
+    if (eventDate < new Date()) {
+      return res.status(400).json({
+        message: "Cannot scan ticket for past event",
+        eventDate: eventDate,
+        ticketId: ticket._id
+      });
+    }
 
-    res.json({ message: "Ticket scanned successfully", ticket: ticketDoc });
+    // Update ticket with scan information
+    ticket.scanned = true;
+    ticket.scannedAt = new Date();
+    ticket.scannedBy = adminId;
+    await ticket.save();
+
+    // Log the successful scan
+    console.log(`Ticket ${ticket._id} scanned successfully by admin ${adminId} at ${ticket.scannedAt}`);
+
+    res.json({ 
+      message: "Ticket scanned successfully", 
+      ticket: {
+        id: ticket._id,
+        reference: ticket.reference,
+        ticketType: ticket.ticketType,
+        scannedAt: ticket.scannedAt,
+        event: ticket.event
+      }
+    });
   } catch (error) {
     console.error("Ticket scanning failed:", error);
     res
       .status(500)
-      .json({ message: "Ticket scanning failed", error: error.message });
+      .json({ 
+        message: "Ticket scanning failed", 
+        error: error.message,
+        timestamp: new Date()
+      });
   }
 };
 
