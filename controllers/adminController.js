@@ -293,24 +293,32 @@ exports.scanTicket = async (req, res) => {
         });
       }
     } else if (ticketId) {
-      // Verify ticket belongs to admin's event
-      const ticketResult = await Ticket.aggregate([
-        { $match: { _id: new ObjectId(ticketId) } },
-        ...getAdminEventsFilter(adminId),
-        { $limit: 1 },
-      ]);
-
-      if (!ticketResult.length) {
-        return res.status(404).json({ message: "Ticket not found or not authorized" });
+      // Find ticket by ID
+      ticket = await Ticket.findById(ticketId);
+      if (!ticket) {
+        return res.status(404).json({ message: "Ticket not found with this ID" });
       }
-
-      ticket = await Ticket.findById(ticketId).populate(
-        "event",
-        "title date"
-      );
     } else {
-      return res.status(400).json({ message: "Either ticketId or qrData is required" });
+      return res.status(400).json({ 
+        message: "Either ticketId or qrData is required" 
+      });
     }
+
+    // Verify the ticket belongs to an event created by this admin
+    const ticketBelongsToAdmin = await Ticket.aggregate([
+      { $match: { _id: ticket._id } },
+      ...getAdminEventsFilter(adminId),
+      { $limit: 1 },
+    ]);
+
+    if (!ticketBelongsToAdmin.length) {
+      return res.status(403).json({ 
+        message: "You are not authorized to scan this ticket" 
+      });
+    }
+
+    // Populate event details
+    ticket = await Ticket.findById(ticket._id).populate("event", "title date");
 
     // Check ticket status
     if (ticket.status !== "success") {
@@ -350,7 +358,7 @@ exports.scanTicket = async (req, res) => {
     await ticket.save();
 
     // Log the successful scan
-    console.log(`Ticket ${ticket._id} scanned successfully by admin ${adminId} at ${ticket.scannedAt}`);
+    console.log(`Ticket ${ticket._id} (${ticket.reference}) scanned successfully by admin ${adminId} at ${ticket.scannedAt}`);
 
     res.json({ 
       message: "Ticket scanned successfully", 
