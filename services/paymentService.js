@@ -138,7 +138,7 @@ const createStripeSession = async (event, ticketType, quantity, mainReference, t
       line_items: [
         {
           price_data: {
-            currency: "usd",
+            currency: "gmd",
             product_data: {
               name: `${event.title} - ${ticketType} Ticket`,
               description: `Purchase of ${quantity} ${ticketType} ticket(s) for ${event.title}`,
