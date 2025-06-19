@@ -26,7 +26,7 @@ const logger = createLogger({
 // Constants
 const PAYMENT_STATUS = {
   PENDING: "pending",
-  COMPLETED: "completed",
+  SUCCESS: "success",
   FAILED: "failed",
   REFUNDED: "refunded"
 };
@@ -201,7 +201,7 @@ const verifyStripePayment = async (session) => {
     }
 
     // Update payment status
-    await updatePaymentStatus(paymentReference, PAYMENT_STATUS.COMPLETED);
+    await updatePaymentStatus(paymentReference, PAYMENT_STATUS.SUCCESS);
 
     logger.info("Stripe payment verified successfully", {
       sessionId: session.id,
@@ -232,8 +232,8 @@ const verifyWavePayment = async (reference) => {
       throw new Error("Payment not found");
     }
 
-    // If payment is already completed, return it
-    if (payment.status === PAYMENT_STATUS.COMPLETED) {
+    // If payment is already SUCCESS, return it
+    if (payment.status === PAYMENT_STATUS.SUCCESS) {
       return { payment, waveData: { status: "succeeded" } };
     }
 
@@ -256,7 +256,7 @@ const verifyWavePayment = async (reference) => {
 
         // Handle different payment statuses
         if (waveData.payment_status === "succeeded" || waveData.checkout_status === "completed") {
-          await updatePaymentStatus(reference, PAYMENT_STATUS.COMPLETED);
+          await updatePaymentStatus(reference, PAYMENT_STATUS.SUCCESS);
           return { 
             payment, 
             waveData: {
