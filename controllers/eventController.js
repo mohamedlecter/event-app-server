@@ -381,6 +381,22 @@ exports.verifyPayment = async (req, res) => {
       },
     });
 
+    // Send SMS notification for successful ticket purchase
+    try {
+      const ticketData = {
+        eventTitle: event.title,
+        eventDate: event.date,
+        ticketType: ticketType,
+        quantity: tickets.length,
+        amount: payment.amount
+      };
+      
+      await notificationService.sendTicketPurchaseSMS(payment.user, ticketData);
+    } catch (smsError) {
+      console.error("Failed to send purchase SMS notification:", smsError);
+      // Don't fail the payment verification if SMS fails
+    }
+
     const updatedPayment = await Payment.findById(payment._id)
       .populate("tickets")
       .populate("event")
@@ -444,11 +460,33 @@ exports.transferTicket = async (req, res) => {
       recipientName
     });
 
-    // Send notification
-    await notificationService.sendTransferNotification(ticketId, {
-      recipientType,
-      recipientValue
-    });
+    // Send SMS notification to recipient
+    try {
+      await notificationService.sendTicketTransferSMS(ticketId, {
+        recipientType,
+        recipientValue,
+        recipientName
+      });
+    } catch (smsError) {
+      console.error("Failed to send transfer SMS notification:", smsError);
+      // Don't fail the transfer if SMS fails
+    }
+
+    // Send SMS confirmation to original ticket owner
+    try {
+      const ticket = await Ticket.findById(ticketId).populate('event');
+      const transferData = {
+        recipientName,
+        recipientValue,
+        eventName: ticket.event.title,
+        eventDate: ticket.event.date
+      };
+      
+      await notificationService.sendTransferConfirmationSMS(req.user.id, transferData);
+    } catch (smsError) {
+      console.error("Failed to send transfer confirmation SMS:", smsError);
+      // Don't fail the transfer if SMS fails
+    }
 
     res.json({ 
       message: "Ticket transferred successfully", 
