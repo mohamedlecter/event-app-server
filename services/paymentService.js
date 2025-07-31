@@ -3,6 +3,7 @@ const Payment = require("../Models/Payments");
 const axios = require("axios");
 const { createLogger, format, transports } = require("winston");
 const dotenv = require("dotenv");
+const events = require("node:events");
 
 // Configure logger
 const logger = createLogger({
@@ -203,6 +204,7 @@ const verifyStripePayment = async (session) => {
     // Update payment status
     await updatePaymentStatus(paymentReference, PAYMENT_STATUS.SUCCESS);
 
+
     logger.info("Stripe payment verified successfully", {
       sessionId: session.id,
       reference: paymentReference,
@@ -257,7 +259,7 @@ const verifyWavePayment = async (reference) => {
         // Handle different payment statuses
         if (waveData.payment_status === "succeeded" || waveData.checkout_status === "completed") {
           await updatePaymentStatus(reference, PAYMENT_STATUS.SUCCESS);
-          return { 
+          return {
             payment, 
             waveData: {
               id: waveData.id,

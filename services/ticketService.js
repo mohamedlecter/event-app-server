@@ -212,11 +212,25 @@ const generateTicketQR = async (ticketId) => {
   return qrCode;
 };
 
+const getEventTickets = async (eventId) => {
+  if (!eventId){
+    throw new Error("Event id is required");
+  }
+  const tickets = await Ticket.find({event: eventId})
+
+  if (!tickets){
+    throw new Error("No tickets for this event");
+  }
+
+  return tickets;
+}
+
 module.exports = {
   createTickets,
   transferTicket,
   cancelTransfer,
   getUserTickets,
   getTransferHistory,
-  generateTicketQR
+  generateTicketQR,
+  getEventTickets
 }; 
