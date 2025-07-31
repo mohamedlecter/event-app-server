@@ -616,7 +616,7 @@ exports.getEventCategories = async (req, res) => {
 };
 
 // get event tickets information
-const getEventTicketsInfo = async (event) => {
+exports.getEventTicketsInfo = async (event) => {
   try {
     const tickets = await ticketService.getEventTickets(event._id);
 

@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Event = require("../Models/EventModel");
 const Ticket = require("../Models/Ticket");
 const Payment = require("../Models/Payments");
+const { getEventTicketsInfo } = require('./eventController');
 const { ObjectId } = mongoose.Types;
 const qrCodeService = require("../services/qrCodeService");
 
@@ -406,9 +407,17 @@ exports.getEventAnalytics = async (req, res) => {
       return res.status(200).json([]);
     }
 
-    const standardTicketsRemaining =
-      event.standardTicket.quantity - event.standardTicket.sold;
-    const vipTicketsRemaining = event.vipTicket.quantity - event.vipTicket.sold;
+    const eventInfo = await getEventTicketsInfo(event);
+
+    if (!eventInfo){
+      throw new Error("Unable to retrieve the event info");
+    }
+
+
+    const standardTicketsRemaining = eventInfo.standardTicketsAvailable;
+      // event.standardTicket.quantity - event.standardTicket.sold;
+    const vipTicketsRemaining = eventInfo.vipTicketsAvailable;
+        // event.vipTicket.quantity - event.vipTicket.sold;
 
     const payments = await Payment.find({
       event: objectEventId,
@@ -425,9 +434,11 @@ exports.getEventAnalytics = async (req, res) => {
 
     res.json({
       event,
+      eventInfo,
       standardTicketsRemaining,
       vipTicketsRemaining,
-      totalTicketsSold: event.standardTicket.sold + event.vipTicket.sold,
+      totalTicketsSold: eventInfo.vipTicketsSold + eventInfo.standardTicketsSold,
+      // totalTicketsSold: event.standardTicket.sold + event.vipTicket.sold,
       revenue,
       payments,
     });
