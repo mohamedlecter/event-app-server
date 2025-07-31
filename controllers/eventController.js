@@ -166,14 +166,45 @@ exports.getAllEvents = async (req, res) => {
   }
 };
 
+
+// get event tickets information
+const getEventTicketsInfo = async (event) => {
+  try {
+    const tickets = await ticketService.getEventTickets(event._id);
+
+    const countByType = (type) =>
+        tickets.filter((t) => t.ticketType === type && t.status === 'success').length;
+
+    const vipSold = countByType("vip");
+    const standardSold = countByType("standard");
+
+    const vipAvailable = event.vipTicket.quantity - vipSold;
+    const standardAvailable = event.standardTicket.quantity - standardSold;
+
+    const soldOut = vipAvailable <= 0 && standardAvailable <= 0;
+
+    return {
+      standardTicketsSold: standardSold,
+      vipTicketsSold: vipSold,
+      standardTicketsAvailable: standardAvailable,
+      vipTicketsAvailable: vipAvailable,
+      soldOut,
+    };
+  } catch (err) {
+    console.error("Error fetching event tickets:", err);
+  }
+}
+
 // Get event details
 exports.getEventDetails = async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
-    const eventInfo = await getEventTicketsInfo(event);
     if (!event) {
       return res.status(404).json({ message: "Event not found" });
     }
+
+    const eventInfo = await getEventTicketsInfo(event);
+
     res.json({
       event: event,
       info: eventInfo
@@ -615,30 +646,5 @@ exports.getEventCategories = async (req, res) => {
   }
 };
 
-// get event tickets information
-const getEventTicketsInfo = async (event) => {
-  try {
-    const tickets = await ticketService.getEventTickets(event._id);
 
-    const countByType = (type) =>
-        tickets.filter((t) => t.ticketType === type && t.status === 'success').length;
-
-    const vipSold = countByType("vip");
-    const standardSold = countByType("standard");
-
-    const vipAvailable = event.vipTicket.quantity - vipSold;
-    const standardAvailable = event.standardTicket.quantity - standardSold;
-
-    const soldOut = vipAvailable <= 0 && standardAvailable <= 0;
-
-    return {
-      standardTicketsSold: standardSold,
-      vipTicketsSold: vipSold,
-      standardTicketsAvailable: standardAvailable,
-      vipTicketsAvailable: vipAvailable,
-      soldOut,
-    };
-  } catch (err) {
-    console.error("Error fetching event tickets:", err);
-  }
-}
+exports.getEventTicketsInfo = getEventTicketsInfo;
