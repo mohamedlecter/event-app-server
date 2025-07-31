@@ -6,8 +6,28 @@ const mongoose = require("mongoose");
 const paymentService = require("../services/paymentService");
 const ticketService = require("../services/ticketService");
 const notificationService = require("../services/notificationService");
+const {createLogger, format, transports} = require("winston");
 
 dotenv.config();
+
+
+const logger = createLogger({
+  level: "info",
+  format: format.combine(
+      format.timestamp(),
+      format.json()
+  ),
+  transports: [
+    new transports.File({ filename: "logs/payment-error.log", level: "error" }),
+    new transports.File({ filename: "logs/payment.log" }),
+    new transports.Console({
+      format: format.combine(
+          format.colorize(),
+          format.simple()
+      )
+    })
+  ]
+});
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 // Wave Configuration
@@ -150,10 +170,14 @@ exports.getAllEvents = async (req, res) => {
 exports.getEventDetails = async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
+    const eventInfo = await getEventTicketsInfo(event);
     if (!event) {
       return res.status(404).json({ message: "Event not found" });
     }
-    res.json(event);
+    res.json({
+      event: event,
+      info: eventInfo
+    });
   } catch (error) {
     res
       .status(500)
@@ -319,7 +343,7 @@ exports.verifyPayment = async (req, res) => {
     if (gateway === "stripe") {
       const session = await stripe.checkout.sessions.retrieve(reference, {
         expand: ["payment_intent"],
-      });
+      })
       const result = await paymentService.verifyStripePayment(session);
       payment = result.payment;
       sessionData = result.session;
@@ -370,16 +394,32 @@ exports.verifyPayment = async (req, res) => {
 
     await Event.findByIdAndUpdate(payment.event, {
       $inc: { [`${ticketField}.sold`]: tickets.length },
-      $set: {
-        soldOut:
-          event.standardTicket.sold +
-            (ticketField === "standardTicket" ? tickets.length : 0) >=
-            event.standardTicket.quantity &&
-          event.vipTicket.sold +
-            (ticketField === "vipTicket" ? tickets.length : 0) >=
-            event.vipTicket.quantity,
-      },
     });
+
+    const updatedEvent = await Event.findById(payment.event);
+
+    const totalSold = updatedEvent.standardTicket.sold + updatedEvent.vipTicket.sold;
+    const totalAvailable =
+        updatedEvent.standardTicket.quantity + updatedEvent.vipTicket.quantity;
+
+    if (totalSold >= totalAvailable) {
+      updatedEvent.soldOut = true;
+      await updatedEvent.save();
+    }
+
+
+    // await Event.findByIdAndUpdate(payment.event, {
+    //   $inc: { [`${ticketField}.sold`]: tickets.length },
+    //   $set: {
+    //     soldOut:
+    //       event.standardTicket.sold +
+    //         (ticketField === "standardTicket" ? tickets.length : 0) >=
+    //         event.standardTicket.quantity &&
+    //       event.vipTicket.sold +
+    //         (ticketField === "vipTicket" ? tickets.length : 0) >=
+    //         event.vipTicket.quantity,
+    //   },
+    // });
 
     // Send SMS notification for successful ticket purchase
     try {
@@ -538,7 +578,7 @@ exports.sendTransferNotification = async (req, res) => {
       recipientValue
     });
 
-    res.json({ 
+    res.json({
       message: "Notification sent successfully",
       notificationData
     });
@@ -573,4 +613,32 @@ exports.getEventCategories = async (req, res) => {
       error: error.message 
     });
   }
-}; 
+};
+
+// get event tickets information
+const getEventTicketsInfo = async (event) => {
+  try {
+    const tickets = await ticketService.getEventTickets(event._id);
+
+    const countByType = (type) =>
+        tickets.filter((t) => t.ticketType === type && t.status === 'success').length;
+
+    const vipSold = countByType("vip");
+    const standardSold = countByType("standard");
+
+    const vipAvailable = event.vipTicket.quantity - vipSold;
+    const standardAvailable = event.standardTicket.quantity - standardSold;
+
+    const soldOut = vipAvailable <= 0 && standardAvailable <= 0;
+
+    return {
+      standardTicketsSold: standardSold,
+      vipTicketsSold: vipSold,
+      standardTicketsAvailable: standardAvailable,
+      vipTicketsAvailable: vipAvailable,
+      soldOut,
+    };
+  } catch (err) {
+    console.error("Error fetching event tickets:", err);
+  }
+}
