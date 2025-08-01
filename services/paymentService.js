@@ -119,7 +119,11 @@ const createStripeSession = async (event, ticketType, quantity, mainReference, t
     });
 
     const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
-    const amount = event[ticketField].price * quantity;
+    let amount = event[ticketField].price * quantity;
+
+    // Convert GMD to USD if event currency is GMD
+    const usdPerGmd = await getGmdToUsdRate();
+    amount = Math.round(amount * usdPerGmd);
 
     // Enhanced metadata with additional information
     const stripeMetadata = {
@@ -259,8 +263,13 @@ const verifyWavePayment = async (reference) => {
         // Handle different payment statuses
         if (waveData.payment_status === "succeeded" || waveData.checkout_status === "completed") {
           await updatePaymentStatus(reference, PAYMENT_STATUS.SUCCESS);
+          // Fetch updated payment
+          const updatedPayment = await Payment.findOne({ reference })
+            .populate("tickets")
+            .populate("event")
+            .populate("user", "name email");
           return {
-            payment, 
+            payment: updatedPayment,
             waveData: {
               id: waveData.id,
               status: "succeeded",
@@ -349,10 +358,26 @@ const updatePaymentStatus = async (reference, status) => {
   }
 };
 
+const getGmdToUsdRate = async () => {
+  try {
+    const response = await axios.get('https://v6.exchangerate-api.com/v6/0c3c3f2278d7441022708f1d/latest/USD');
+    // GMD per USD is response.data.conversion_rates.GMD
+    const gmdPerUsd = response.data.conversion_rates.GMD;
+    if (!gmdPerUsd) throw new Error("Conversion rate not found");
+    // USD per GMD
+    const usdPerGmd = 1 / gmdPerUsd;
+    return usdPerGmd;
+  } catch (error) {
+    logger.error("Failed to fetch GMD to USD conversion rate", { error: error.message });
+    // Fallback to a default rate if needed
+    return 0.017;
+  }
+};
+
 module.exports = {
   createWaveCheckout,
   createStripeSession,
   verifyStripePayment,
   verifyWavePayment,
   PAYMENT_STATUS,
-}; 
+};

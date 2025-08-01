@@ -200,6 +200,7 @@ exports.getAllPayments = async (req, res) => {
           createdAt: 1,
           "userDetails.name": 1,
           "userDetails.email": 1,
+          "userDetails.mobileNumber": 1,
           "eventDetails.title": 1,
           "ticketDetails.scanned": 1,
           "ticketDetails._id": 1,
@@ -423,7 +424,7 @@ exports.getEventAnalytics = async (req, res) => {
       event: objectEventId,
       status: "success",
     })
-      .populate("user", "name email")
+      .populate("user", "name email mobileNumber")
       .sort({ createdAt: -1 });
 
     const revenueResult = await Payment.aggregate([

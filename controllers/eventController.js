@@ -276,9 +276,9 @@ exports.initiatePayment = async (req, res) => {
     }
 
     const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
-    if (event[ticketField].sold + quantity > event[ticketField].quantity) {
-      return res.status(400).json({ message: "Not enough tickets available" });
-    }
+    // if (event[ticketField].sold + quantity > event[ticketField].quantity) {
+    //   return res.status(400).json({ message: "Not enough tickets available" });
+    // }
 
     const amount = event[ticketField].price * quantity;
     mainReference = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
