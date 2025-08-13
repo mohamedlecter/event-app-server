@@ -24,8 +24,8 @@ const ticketSchema = new mongoose.Schema({
   },
   ticketType: {
     type: String,
-    enum: ["standard", "vip"],
     required: true,
+    // Remove the enum restriction to allow any ticket type name
   },
   price: {
     type: Number,

@@ -11,15 +11,20 @@ const isValidMobile = (mobile) => {
 };
 
 const validateEventInput = (data) => {
+  const ticketTypeSchema = Joi.object({
+    name: Joi.string().required().min(1).max(50),
+    price: Joi.number().required().min(0),
+    quantity: Joi.number().required().min(1),
+    description: Joi.string().optional().max(200),
+    benefits: Joi.array().items(Joi.string()).optional()
+  });
+
   const schema = Joi.object({
     title: Joi.string().required().min(3).max(100),
-    description: Joi.string().required().min(10),
+    description: Joi.string().optional().min(10),
     country: Joi.string().required(),
     city: Joi.string().required(),
-    standardPrice: Joi.number().required().min(0),
-    standardQuantity: Joi.number().required().min(1),
-    vipPrice: Joi.number().required().min(0),
-    vipQuantity: Joi.number().required().min(1),
+    ticketTypes: Joi.array().items(ticketTypeSchema).required().min(1),
     date: Joi.date().required().min('now'),
     category: Joi.string().required(),
   });
@@ -29,7 +34,7 @@ const validateEventInput = (data) => {
 
 const validatePaymentInput = (data) => {
   const schema = Joi.object({
-    ticketType: Joi.string().valid('standard', 'vip').required(),
+    ticketTypeName: Joi.string().required(),
     quantity: Joi.number().required().min(1),
     recipientType: Joi.string().valid('email', 'mobile').required(),
     recipientInfo: Joi.array().items(

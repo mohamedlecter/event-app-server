@@ -10,6 +10,7 @@ const upload = require('../config/multer');
 router.get('/', eventController.getAllEvents);
 router.get('/categories', eventController.getEventCategories);
 router.get('/:id', eventController.getEventDetails);
+router.get('/:eventId/ticket-types', eventController.getEventTicketTypes);
 
 // Protected routes (require authentication)
 router.use(authMiddleware);

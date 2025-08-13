@@ -44,32 +44,69 @@ exports.createEvent = async (req, res) => {
       description,
       country,
       city,
-      standardPrice,
-      standardQuantity,
-      vipPrice,
-      vipQuantity,
+      ticketTypes,
       date,
       category,
       image
     } = req.body;
 
     // Validate required fields
-    if (!title || !country || !city || !standardPrice || !standardQuantity || 
-        !vipPrice || !vipQuantity || !date || !category) {
+    if (!title || !country || !city || !ticketTypes || !date || !category) {
       return res.status(400).json({
         message: "Missing required fields",
         required: {
           title: "Event title",
           country: "Country",
           city: "City",
-          standardPrice: "Standard ticket price",
-          standardQuantity: "Standard ticket quantity",
-          vipPrice: "VIP ticket price",
-          vipQuantity: "VIP ticket quantity",
+          ticketTypes: "Array of ticket types",
           date: "Event date",
           category: "Event category"
         }
       });
+    }
+
+    // Validate ticketTypes array
+    if (!Array.isArray(ticketTypes) || ticketTypes.length === 0) {
+      return res.status(400).json({
+        message: "At least one ticket type is required"
+      });
+    }
+
+    // Validate each ticket type
+    for (let i = 0; i < ticketTypes.length; i++) {
+      const ticketType = ticketTypes[i];
+      if (!ticketType.name || !ticketType.price || !ticketType.quantity) {
+        return res.status(400).json({
+          message: `Ticket type ${i + 1} is missing required fields`,
+          required: {
+            name: "Ticket type name",
+            price: "Ticket price",
+            quantity: "Ticket quantity"
+          }
+        });
+      }
+
+      if (ticketType.price <= 0) {
+        return res.status(400).json({
+          message: `Price for ticket type "${ticketType.name}" must be greater than 0`
+        });
+      }
+
+      if (ticketType.quantity <= 0) {
+        return res.status(400).json({
+          message: `Quantity for ticket type "${ticketType.name}" must be greater than 0`
+        });
+      }
+
+      // Check for duplicate ticket type names
+      const duplicateIndex = ticketTypes.findIndex((tt, index) => 
+        index !== i && tt.name.toLowerCase() === ticketType.name.toLowerCase()
+      );
+      if (duplicateIndex !== -1) {
+        return res.status(400).json({
+          message: `Duplicate ticket type name: "${ticketType.name}"`
+        });
+      }
     }
 
     // Validate category
@@ -78,19 +115,6 @@ exports.createEvent = async (req, res) => {
       return res.status(400).json({
         message: "Invalid category",
         validCategories
-      });
-    }
-
-    // Validate prices and quantities
-    if (standardPrice <= 0 || vipPrice <= 0) {
-      return res.status(400).json({
-        message: "Prices must be greater than 0"
-      });
-    }
-
-    if (standardQuantity <= 0 || vipQuantity <= 0) {
-      return res.status(400).json({
-        message: "Quantities must be greater than 0"
       });
     }
 
@@ -108,6 +132,16 @@ exports.createEvent = async (req, res) => {
       });
     }
 
+    // Prepare ticket types with default values
+    const preparedTicketTypes = ticketTypes.map(ticketType => ({
+      name: ticketType.name.trim(),
+      price: Number(ticketType.price),
+      quantity: Number(ticketType.quantity),
+      sold: 0,
+      description: ticketType.description || "",
+      benefits: ticketType.benefits || []
+    }));
+
     const event = new Event({
       title,
       description,
@@ -115,16 +149,7 @@ exports.createEvent = async (req, res) => {
         country, 
         city 
       },
-      standardTicket: {
-        price: Number(standardPrice),
-        quantity: Number(standardQuantity),
-        sold: 0
-      },
-      vipTicket: {
-        price: Number(vipPrice),
-        quantity: Number(vipQuantity),
-        sold: 0
-      },
+      ticketTypes: preparedTicketTypes,
       date: eventDate,
       category: category.toLowerCase(),
       createdBy: req.user.id,
@@ -172,26 +197,48 @@ const getEventTicketsInfo = async (event) => {
   try {
     const tickets = await ticketService.getEventTickets(event._id);
 
-    const countByType = (type) =>
-        tickets.filter((t) => t.ticketType === type && t.status === 'success').length;
+    // Group tickets by type and count successful ones
+    const ticketsByType = {};
+    tickets.forEach(ticket => {
+      if (ticket.status === 'success') {
+        if (!ticketsByType[ticket.ticketType]) {
+          ticketsByType[ticket.ticketType] = 0;
+        }
+        ticketsByType[ticket.ticketType]++;
+      }
+    });
 
-    const vipSold = countByType("vip");
-    const standardSold = countByType("standard");
+    // Calculate availability for each ticket type
+    const ticketTypesInfo = event.ticketTypes.map(ticketType => {
+      const sold = ticketsByType[ticketType.name] || 0;
+      const available = ticketType.quantity - sold;
+      
+      return {
+        name: ticketType.name,
+        price: ticketType.price,
+        quantity: ticketType.quantity,
+        sold: sold,
+        available: available,
+        description: ticketType.description,
+        benefits: ticketType.benefits
+      };
+    });
 
-    const vipAvailable = event.vipTicket.quantity - vipSold;
-    const standardAvailable = event.standardTicket.quantity - standardSold;
-
-    const soldOut = vipAvailable <= 0 && standardAvailable <= 0;
+    // Check if all ticket types are sold out
+    const soldOut = ticketTypesInfo.every(type => type.available <= 0);
 
     return {
-      standardTicketsSold: standardSold,
-      vipTicketsSold: vipSold,
-      standardTicketsAvailable: standardAvailable,
-      vipTicketsAvailable: vipAvailable,
+      ticketTypes: ticketTypesInfo,
       soldOut,
+      totalTicketTypes: event.ticketTypes.length
     };
   } catch (err) {
     console.error("Error fetching event tickets:", err);
+    return {
+      ticketTypes: [],
+      soldOut: false,
+      totalTicketTypes: 0
+    };
   }
 }
 
@@ -255,7 +302,7 @@ exports.initiatePayment = async (req, res) => {
   try {
     const { eventId } = req.params;
     const {
-      ticketType,
+      ticketTypeName,
       quantity,
       recipientType,
       recipientInfo,
@@ -275,12 +322,34 @@ exports.initiatePayment = async (req, res) => {
       return res.status(400).json({ message: "Event is sold out" });
     }
 
-    const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
-    // if (event[ticketField].sold + quantity > event[ticketField].quantity) {
-    //   return res.status(400).json({ message: "Not enough tickets available" });
-    // }
+    // Find the requested ticket type
+    const ticketType = event.getTicketTypeByName(ticketTypeName);
+    if (!ticketType) {
+      return res.status(400).json({ 
+        message: "Invalid ticket type",
+        availableTicketTypes: event.ticketTypes.map(tt => tt.name)
+      });
+    }
 
-    const amount = event[ticketField].price * quantity;
+    // Check if ticket type is available
+    if (!event.isTicketTypeAvailable(ticketTypeName)) {
+      return res.status(400).json({ 
+        message: `"${ticketTypeName}" tickets are sold out`,
+        availableTicketTypes: event.getAvailableTicketTypes().map(tt => tt.name)
+      });
+    }
+
+    // Check if enough tickets are available
+    const availableTickets = ticketType.quantity - ticketType.sold;
+    if (quantity > availableTickets) {
+      return res.status(400).json({ 
+        message: `Only ${availableTickets} "${ticketTypeName}" tickets available`,
+        available: availableTickets,
+        requested: quantity
+      });
+    }
+
+    const amount = ticketType.price * quantity;
     mainReference = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     // Create payment record
@@ -299,8 +368,8 @@ exports.initiatePayment = async (req, res) => {
       eventId,
       userId,
       quantity,
-      ticketType,
-      event[ticketField].price,
+      ticketTypeName,
+      ticketType.price,
       mainReference,
       recipientInfo,
       recipientType
@@ -328,7 +397,7 @@ exports.initiatePayment = async (req, res) => {
     } else {
       const session = await paymentService.createStripeSession(
         event,
-        ticketType,
+        ticketTypeName,
         quantity,
         mainReference,
         ticketReferences,
@@ -418,22 +487,24 @@ exports.verifyPayment = async (req, res) => {
       await ticketService.generateTicketQR(ticket._id);
     }
 
-    // Update event ticket counts
-    const ticketType = tickets[0].ticketType;
-    const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
+    // Update event ticket counts for the specific ticket type
+    const ticketTypeName = tickets[0].ticketType;
     const event = await Event.findById(payment.event);
+    
+    // Find the ticket type index and update the sold count
+    const ticketTypeIndex = event.ticketTypes.findIndex(tt => tt.name === ticketTypeName);
+    if (ticketTypeIndex !== -1) {
+      event.ticketTypes[ticketTypeIndex].sold += tickets.length;
+      await event.save();
+    }
 
-    await Event.findByIdAndUpdate(payment.event, {
-      $inc: { [`${ticketField}.sold`]: tickets.length },
-    });
-
+    // Check if event is sold out
     const updatedEvent = await Event.findById(payment.event);
+    const allSoldOut = updatedEvent.ticketTypes.every(ticketType => 
+      ticketType.sold >= ticketType.quantity
+    );
 
-    const totalSold = updatedEvent.standardTicket.sold + updatedEvent.vipTicket.sold;
-    const totalAvailable =
-        updatedEvent.standardTicket.quantity + updatedEvent.vipTicket.quantity;
-
-    if (totalSold >= totalAvailable) {
+    if (allSoldOut) {
       updatedEvent.soldOut = true;
       await updatedEvent.save();
     }
@@ -641,6 +712,37 @@ exports.getEventCategories = async (req, res) => {
   } catch (error) {
     res.status(500).json({ 
       message: "Failed to fetch categories", 
+      error: error.message 
+    });
+  }
+};
+
+// Get available ticket types for an event
+exports.getEventTicketTypes = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      return res.status(400).json({ message: "Invalid event ID" });
+    }
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    const eventInfo = await getEventTicketsInfo(event);
+    
+    res.json({
+      eventId: event._id,
+      eventTitle: event.title,
+      ticketTypes: eventInfo.ticketTypes,
+      soldOut: eventInfo.soldOut,
+      totalTicketTypes: eventInfo.totalTicketTypes
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      message: "Failed to fetch ticket types", 
       error: error.message 
     });
   }

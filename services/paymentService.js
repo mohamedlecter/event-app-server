@@ -109,17 +109,22 @@ const createWaveCheckout = async (amount, currency, reference, callbackUrl) => {
 };
 
 // Create Stripe session
-const createStripeSession = async (event, ticketType, quantity, mainReference, ticketReferences, metadata) => {
+const createStripeSession = async (event, ticketTypeName, quantity, mainReference, ticketReferences, metadata) => {
   try {
     logger.info("Creating Stripe checkout session", {
       eventId: event._id,
-      ticketType,
+      ticketTypeName,
       quantity,
       reference: mainReference,
     });
 
-    const ticketField = ticketType === "vip" ? "vipTicket" : "standardTicket";
-    let amount = event[ticketField].price * quantity;
+    // Find the ticket type from the event
+    const ticketType = event.getTicketTypeByName(ticketTypeName);
+    if (!ticketType) {
+      throw new Error(`Ticket type "${ticketTypeName}" not found`);
+    }
+
+    let amount = ticketType.price * quantity;
 
     // Convert GMD to USD if event currency is GMD
     const usdPerGmd = await getGmdToUsdRate();
@@ -129,7 +134,7 @@ const createStripeSession = async (event, ticketType, quantity, mainReference, t
     const stripeMetadata = {
       eventId: event._id.toString(),
       eventTitle: event.title,
-      ticketType,
+      ticketType: ticketTypeName,
       quantity: quantity.toString(),
       ticketReferences: JSON.stringify(ticketReferences),
       timestamp: new Date().toISOString(),
@@ -145,11 +150,11 @@ const createStripeSession = async (event, ticketType, quantity, mainReference, t
           price_data: {
             currency: "usd",
             product_data: {
-              name: `${event.title} - ${ticketType} Ticket`,
-              description: `Purchase of ${quantity} ${ticketType} ticket(s) for ${event.title}`,
+              name: `${event.title} - ${ticketTypeName} Ticket`,
+              description: `Purchase of ${quantity} ${ticketTypeName} ticket(s) for ${event.title}`,
               metadata: {
                 eventId: event._id.toString(),
-                ticketType,
+                ticketType: ticketTypeName,
               },
             },
             unit_amount: amount * 100,

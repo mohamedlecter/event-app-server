@@ -86,16 +86,9 @@ exports.getDashboardStats = async (req, res) => {
         $group: {
           _id: null,
           totalTicketsSold: { $sum: 1 },
-          standardTicketsSold: {
-            $sum: {
-              $cond: [{ $eq: ["$ticketType", "standard"] }, 1, 0],
-            },
-          },
-          vipTicketsSold: {
-            $sum: {
-              $cond: [{ $eq: ["$ticketType", "vip"] }, 1, 0],
-            },
-          },
+          ticketsByType: {
+            $push: "$ticketType"
+          }
         },
       },
     ]);
@@ -120,41 +113,42 @@ exports.getDashboardStats = async (req, res) => {
         $group: {
           _id: null,
           totalScannedTickets: { $sum: 1 },
-          standardScanned: {
-            $sum: {
-              $cond: [{ $eq: ["$ticketType", "standard"] }, 1, 0],
-            },
-          },
-          vipScanned: {
-            $sum: {
-              $cond: [{ $eq: ["$ticketType", "vip"] }, 1, 0],
-            },
-          },
+          scannedByType: {
+            $push: "$ticketType"
+          }
         },
       },
     ]);
 
+    // Process ticket stats by type
     const stats = ticketStats[0] || {
       totalTicketsSold: 0,
-      standardTicketsSold: 0,
-      vipTicketsSold: 0,
+      ticketsByType: []
     };
 
     const scanned = scannedStats[0] || {
       totalScannedTickets: 0,
-      standardScanned: 0,
-      vipScanned: 0,
+      scannedByType: []
     };
+
+    // Count tickets by type
+    const ticketsByType = {};
+    stats.ticketsByType.forEach(type => {
+      ticketsByType[type] = (ticketsByType[type] || 0) + 1;
+    });
+
+    const scannedByType = {};
+    scanned.scannedByType.forEach(type => {
+      scannedByType[type] = (scannedByType[type] || 0) + 1;
+    });
 
     res.json({
       totalEvents,
       totalTicketsSold: stats.totalTicketsSold,
-      standardTicketsSold: stats.standardTicketsSold,
-      vipTicketsSold: stats.vipTicketsSold,
+      ticketsByType,
       totalRevenue: revenueResult[0]?.total || 0,
       totalScannedTickets: scanned.totalScannedTickets,
-      standardScannedTickets: scanned.standardScanned,
-      vipScannedTickets: scanned.vipScanned,
+      scannedByType,
     });
   } catch (error) {
     console.error("Error fetching dashboard stats:", error);
@@ -387,7 +381,6 @@ exports.scanTicket = async (req, res) => {
 /**
  * Get analytics for a specific event (tickets remaining, revenue, payments)
  */
-
 exports.getEventAnalytics = async (req, res) => {
   try {
     const adminId = req.user.id;
@@ -414,11 +407,12 @@ exports.getEventAnalytics = async (req, res) => {
       throw new Error("Unable to retrieve the event info");
     }
 
-
-    const standardTicketsRemaining = eventInfo.standardTicketsAvailable;
-      // event.standardTicket.quantity - event.standardTicket.sold;
-    const vipTicketsRemaining = eventInfo.vipTicketsAvailable;
-        // event.vipTicket.quantity - event.vipTicket.sold;
+    // Calculate tickets remaining for each ticket type
+    const ticketsRemaining = {};
+    event.ticketTypes.forEach(ticketType => {
+      const sold = eventInfo.ticketTypes.find(tt => tt.name === ticketType.name)?.sold || 0;
+      ticketsRemaining[ticketType.name] = ticketType.quantity - sold;
+    });
 
     const payments = await Payment.find({
       event: objectEventId,
@@ -436,10 +430,8 @@ exports.getEventAnalytics = async (req, res) => {
     res.json({
       event,
       eventInfo,
-      standardTicketsRemaining,
-      vipTicketsRemaining,
-      totalTicketsSold: eventInfo.vipTicketsSold + eventInfo.standardTicketsSold,
-      // totalTicketsSold: event.standardTicket.sold + event.vipTicket.sold,
+      ticketsRemaining,
+      totalTicketsSold: eventInfo.ticketTypes.reduce((total, tt) => total + tt.sold, 0),
       revenue,
       payments,
     });
