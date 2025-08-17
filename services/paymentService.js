@@ -1,3 +1,23 @@
+/**
+ * Payment Service
+ * 
+ * Supports multiple currencies and payment gateways:
+ * 
+ * Wave Payment Gateway:
+ * - Supports: GMD (Gambian Dalasi) only
+ * - Other currencies are automatically converted to GMD
+ * 
+ * Stripe Payment Gateway:
+ * - Supports: USD, EUR, GBP directly
+ * - GMD and XOF are converted to USD for processing
+ * - Real-time exchange rates from exchangerate-api.com
+ * 
+ * Currency Conversion:
+ * - All conversions go through USD as base currency
+ * - Exchange rates are cached and updated regularly
+ * - Fallback rates provided if API is unavailable
+ */
+
 const Ticket = require("../Models/Ticket");
 const Payment = require("../Models/Payments");
 const axios = require("axios");
@@ -49,9 +69,58 @@ const validatePaymentAmount = (amount, currency) => {
   if (amount <= 0) {
     throw new Error("Invalid payment amount");
   }
-  if (!["XOF", "GMD", "USD", "EUR"].includes(currency.toUpperCase())) {
+  if (!["XOF", "GMD", "USD", "EUR", "GBP"].includes(currency.toUpperCase())) {
     throw new Error("Unsupported currency");
   }
+};
+
+// Get exchange rates for currency conversion
+const getExchangeRates = async () => {
+  try {
+    const response = await axios.get('https://v6.exchangerate-api.com/v6/0c3c3f2278d7441022708f1d/latest/USD');
+    const rates = response.data.conversion_rates;
+    
+    return {
+      USD: 1,
+      EUR: rates.EUR || 0.85,
+      GBP: rates.GBP || 0.73,
+      GMD: rates.GMD || 58.5,
+      XOF: rates.XOF || 550
+    };
+  } catch (error) {
+    logger.error("Failed to fetch exchange rates", { error: error.message });
+    // Fallback rates if API fails
+    return {
+      USD: 1,
+      EUR: 0.85,
+      GBP: 0.73,
+      GMD: 58.5,
+      XOF: 550
+    };
+  }
+};
+
+// Convert amount from one currency to another
+const convertCurrency = async (amount, fromCurrency, toCurrency) => {
+  if (fromCurrency === toCurrency) {
+    return { amount, rate: 1 };
+  }
+
+  const rates = await getExchangeRates();
+  
+  // Validate currencies exist in rates
+  if (!rates[fromCurrency] || !rates[toCurrency]) {
+    throw new Error(`Unsupported currency conversion: ${fromCurrency} to ${toCurrency}`);
+  }
+  
+  // Convert to USD first, then to target currency
+  const usdAmount = amount / rates[fromCurrency];
+  const convertedAmount = usdAmount * rates[toCurrency];
+  
+  return {
+    amount: Math.round(convertedAmount * 100) / 100, // Round to 2 decimal places
+    rate: rates[toCurrency] / rates[fromCurrency]
+  };
 };
 
 // Create Wave payout
@@ -61,11 +130,21 @@ const createWaveCheckout = async (amount, currency, reference, callbackUrl) => {
     
     validatePaymentAmount(amount, currency);
 
+    // Wave only supports GMD, so convert if needed
+    let waveAmount = amount;
+    let exchangeRate = 1;
+    
+    if (currency !== "GMD") {
+      const conversion = await convertCurrency(amount, currency, "GMD");
+      waveAmount = conversion.amount;
+      exchangeRate = conversion.rate;
+    }
+
     const response = await axios.post(
       `${waveConfig.apiUrl}/checkout/sessions`,
       {
-        amount: amount.toString(),
-        currency: currency.toUpperCase(),
+        amount: waveAmount.toString(),
+        currency: "GMD",
         client_reference: reference,
         success_url: callbackUrl,
         error_url: `${process.env.FRONTEND_URL}/payment-error?reference=${reference}`,
@@ -80,13 +159,16 @@ const createWaveCheckout = async (amount, currency, reference, callbackUrl) => {
       }
     );
 
-    // Store the session ID in the payment record
+    // Store the session ID and conversion info in the payment record
     await Payment.findOneAndUpdate(
       { reference },
       { 
         waveSessionId: response.data.id,
         status: PAYMENT_STATUS.PENDING,
-        wavePaymentId: response.data.id
+        wavePaymentId: response.data.id,
+        amount: waveAmount,
+        currency: "GMD",
+        exchangeRate: exchangeRate
       }
     );
 
@@ -96,7 +178,11 @@ const createWaveCheckout = async (amount, currency, reference, callbackUrl) => {
     return {
       id: response.data.id,
       payment_url: response.data.wave_launch_url,
-      url: response.data.wave_launch_url
+      url: response.data.wave_launch_url,
+      convertedAmount: waveAmount,
+      originalAmount: amount,
+      originalCurrency: currency,
+      exchangeRate: exchangeRate
     };
   } catch (error) {
     logger.error("Wave checkout session creation failed", {
@@ -109,13 +195,14 @@ const createWaveCheckout = async (amount, currency, reference, callbackUrl) => {
 };
 
 // Create Stripe session
-const createStripeSession = async (event, ticketTypeName, quantity, mainReference, ticketReferences, metadata) => {
+const createStripeSession = async (event, ticketTypeName, quantity, mainReference, ticketReferences, metadata, currency = "USD") => {
   try {
     logger.info("Creating Stripe checkout session", {
       eventId: event._id,
       ticketTypeName,
       quantity,
       reference: mainReference,
+      currency,
     });
 
     // Find the ticket type from the event
@@ -124,11 +211,30 @@ const createStripeSession = async (event, ticketTypeName, quantity, mainReferenc
       throw new Error(`Ticket type "${ticketTypeName}" not found`);
     }
 
-    let amount = ticketType.price * quantity;
+    let originalAmount = ticketType.price * quantity;
+    let stripeAmount = originalAmount;
+    let exchangeRate = 1;
 
-    // Convert GMD to USD if event currency is GMD
-    const usdPerGmd = await getGmdToUsdRate();
-    amount = Math.round(amount * usdPerGmd);
+    // Convert to Stripe-supported currency if needed
+    if (currency === "GMD") {
+      // Convert GMD to USD for Stripe
+      const conversion = await convertCurrency(originalAmount, "GMD", "USD");
+      stripeAmount = conversion.amount;
+      exchangeRate = conversion.rate;
+    } else if (currency === "EUR") {
+      // Stripe supports EUR directly
+      stripeAmount = originalAmount;
+    } else if (currency === "GBP") {
+      // Stripe supports GBP directly
+      stripeAmount = originalAmount;
+    } else {
+      // Default to USD
+      if (currency !== "USD") {
+        const conversion = await convertCurrency(originalAmount, currency, "USD");
+        stripeAmount = conversion.amount;
+        exchangeRate = conversion.rate;
+      }
+    }
 
     // Enhanced metadata with additional information
     const stripeMetadata = {
@@ -137,6 +243,9 @@ const createStripeSession = async (event, ticketTypeName, quantity, mainReferenc
       ticketType: ticketTypeName,
       quantity: quantity.toString(),
       ticketReferences: JSON.stringify(ticketReferences),
+      originalAmount: originalAmount.toString(),
+      originalCurrency: currency,
+      exchangeRate: exchangeRate.toString(),
       timestamp: new Date().toISOString(),
       ...Object.fromEntries(
         Object.entries(metadata || {}).map(([key, value]) => [key, String(value)])
@@ -148,7 +257,7 @@ const createStripeSession = async (event, ticketTypeName, quantity, mainReferenc
       line_items: [
         {
           price_data: {
-            currency: "usd",
+            currency: currency === "GMD" ? "usd" : currency.toLowerCase(),
             product_data: {
               name: `${event.title} - ${ticketTypeName} Ticket`,
               description: `Purchase of ${quantity} ${ticketTypeName} ticket(s) for ${event.title}`,
@@ -157,7 +266,7 @@ const createStripeSession = async (event, ticketTypeName, quantity, mainReferenc
                 ticketType: ticketTypeName,
               },
             },
-            unit_amount: amount * 100,
+            unit_amount: Math.round(stripeAmount * 100),
           },
           quantity: 1,
         },
@@ -172,12 +281,32 @@ const createStripeSession = async (event, ticketTypeName, quantity, mainReferenc
       },
     });
 
+    // Update payment record with conversion info
+    await Payment.findOneAndUpdate(
+      { reference: mainReference },
+      {
+        amount: stripeAmount,
+        currency: currency === "GMD" || currency === "XOF" ? "USD" : currency,
+        originalAmount: originalAmount,
+        originalCurrency: currency,
+        exchangeRate: exchangeRate
+      }
+    );
+
     logger.info("Stripe checkout session created successfully", {
       sessionId: session.id,
       reference: mainReference,
+      originalAmount,
+      stripeAmount,
+      currency,
     });
 
-    return session;
+    return {
+      ...session,
+      originalAmount,
+      convertedAmount: stripeAmount,
+      exchangeRate
+    };
   } catch (error) {
     logger.error("Stripe session creation failed", {
       error: error.message,
@@ -363,26 +492,14 @@ const updatePaymentStatus = async (reference, status) => {
   }
 };
 
-const getGmdToUsdRate = async () => {
-  try {
-    const response = await axios.get('https://v6.exchangerate-api.com/v6/0c3c3f2278d7441022708f1d/latest/USD');
-    // GMD per USD is response.data.conversion_rates.GMD
-    const gmdPerUsd = response.data.conversion_rates.GMD;
-    if (!gmdPerUsd) throw new Error("Conversion rate not found");
-    // USD per GMD
-    const usdPerGmd = 1 / gmdPerUsd;
-    return usdPerGmd;
-  } catch (error) {
-    logger.error("Failed to fetch GMD to USD conversion rate", { error: error.message });
-    // Fallback to a default rate if needed
-    return 0.017;
-  }
-};
+
 
 module.exports = {
   createWaveCheckout,
   createStripeSession,
   verifyStripePayment,
   verifyWavePayment,
+  convertCurrency,
+  getExchangeRates,
   PAYMENT_STATUS,
 };

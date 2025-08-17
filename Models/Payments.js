@@ -43,8 +43,21 @@ const paymentSchema = new mongoose.Schema({
   stripePaymentIntent: String,
   currency: {
     type: String,
-    enum: ["USD", "XOF", "GMD", "EUR"],
+    enum: ["USD", "XOF", "GMD", "EUR", "GBP"],
     default: "GMD",
+  },
+  originalAmount: {
+    type: Number,
+    required: true,
+  },
+  originalCurrency: {
+    type: String,
+    enum: ["USD", "XOF", "GMD", "EUR", "GBP"],
+    default: "GMD",
+  },
+  exchangeRate: {
+    type: Number,
+    default: 1,
   },
   createdAt: {
     type: Date,

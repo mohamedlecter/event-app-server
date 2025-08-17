@@ -93,11 +93,11 @@ exports.getDashboardStats = async (req, res) => {
       },
     ]);
 
-    // Aggregate total revenue from successful payments
+    // Aggregate total revenue from successful payments (using original amounts)
     const revenueResult = await Payment.aggregate([
       ...getAdminEventsFilter(adminId),
       { $match: { status: "success" } },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
+      { $group: { _id: null, total: { $sum: "$originalAmount" } } },
     ]);
 
     // Aggregate scanned tickets stats for admin's events
@@ -423,7 +423,7 @@ exports.getEventAnalytics = async (req, res) => {
 
     const revenueResult = await Payment.aggregate([
       { $match: { event: objectEventId, status: "success" } },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
+      { $group: { _id: null, total: { $sum: "$originalAmount" } } },
     ]);
     const revenue = revenueResult[0]?.total || 0;
 

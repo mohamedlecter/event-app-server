@@ -14,6 +14,7 @@ const validateEventInput = (data) => {
   const ticketTypeSchema = Joi.object({
     name: Joi.string().required().min(1).max(50),
     price: Joi.number().required().min(0),
+    currency: Joi.string().valid('USD', 'XOF', 'GMD', 'EUR', 'GBP').default('GMD'),
     quantity: Joi.number().required().min(1),
     description: Joi.string().optional().max(200),
     benefits: Joi.array().items(Joi.string()).optional()
@@ -45,7 +46,6 @@ const validatePaymentInput = (data) => {
       })
     ).required(),
     paymentGateway: Joi.string().valid('stripe', 'wave').default('stripe'),
-    currency: Joi.string().valid('USD', 'XOF', 'GMD').default('GMD'),
     metadata: Joi.object({
       eventId: Joi.string().required(),
       eventTitle: Joi.string(),

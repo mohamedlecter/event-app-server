@@ -98,6 +98,14 @@ exports.createEvent = async (req, res) => {
         });
       }
 
+      // Validate currency
+      const validCurrencies = ["USD", "XOF", "GMD", "EUR", "GBP"];
+      if (ticketType.currency && !validCurrencies.includes(ticketType.currency.toUpperCase())) {
+        return res.status(400).json({
+          message: `Invalid currency for ticket type "${ticketType.name}". Supported currencies: ${validCurrencies.join(", ")}`
+        });
+      }
+
       // Check for duplicate ticket type names
       const duplicateIndex = ticketTypes.findIndex((tt, index) => 
         index !== i && tt.name.toLowerCase() === ticketType.name.toLowerCase()
@@ -136,6 +144,7 @@ exports.createEvent = async (req, res) => {
     const preparedTicketTypes = ticketTypes.map(ticketType => ({
       name: ticketType.name.trim(),
       price: Number(ticketType.price),
+      currency: ticketType.currency || "GMD",
       quantity: Number(ticketType.quantity),
       sold: 0,
       description: ticketType.description || "",
@@ -216,6 +225,7 @@ const getEventTicketsInfo = async (event) => {
       return {
         name: ticketType.name,
         price: ticketType.price,
+        currency: ticketType.currency,
         quantity: ticketType.quantity,
         sold: sold,
         available: available,
@@ -307,7 +317,6 @@ exports.initiatePayment = async (req, res) => {
       recipientType,
       recipientInfo,
       paymentGateway = "stripe",
-      currency = "GMD",
       metadata
     } = req.body;
     const userId = req.user.id;
@@ -350,7 +359,20 @@ exports.initiatePayment = async (req, res) => {
     }
 
     const amount = ticketType.price * quantity;
+    const currency = ticketType.currency;
     mainReference = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    // Validate currency based on payment gateway
+    const validCurrencies = {
+      wave: ["GMD"],
+      stripe: ["USD", "EUR", "GBP", "GMD"]
+    };
+
+    if (!validCurrencies[paymentGateway]?.includes(currency.toUpperCase())) {
+      return res.status(400).json({
+        message: `Invalid currency for ${paymentGateway}. Ticket type "${ticketTypeName}" uses ${currency}, but ${paymentGateway} supports: ${validCurrencies[paymentGateway].join(", ")}`
+      });
+    }
 
     // Create payment record
     const payment = await Payment.create({
@@ -361,6 +383,9 @@ exports.initiatePayment = async (req, res) => {
       status: "pending",
       paymentGateway,
       currency,
+      originalAmount: amount,
+      originalCurrency: currency,
+      exchangeRate: 1,
     });
 
     // Create tickets with recipient information
@@ -392,7 +417,11 @@ exports.initiatePayment = async (req, res) => {
         id: waveSession.id,
         paymentUrl: waveSession.payment_url || waveSession.url,
         gateway: "wave",
-        reference: mainReference
+        reference: mainReference,
+        originalAmount: waveSession.originalAmount,
+        convertedAmount: waveSession.convertedAmount,
+        originalCurrency: waveSession.originalCurrency,
+        exchangeRate: waveSession.exchangeRate
       });
     } else {
       const session = await paymentService.createStripeSession(
@@ -401,13 +430,17 @@ exports.initiatePayment = async (req, res) => {
         quantity,
         mainReference,
         ticketReferences,
-        metadata
+        metadata,
+        currency
       );
 
       return res.json({ 
         id: session.id, 
         gateway: "stripe",
-        reference: mainReference
+        reference: mainReference,
+        originalAmount: session.originalAmount,
+        convertedAmount: session.convertedAmount,
+        exchangeRate: session.exchangeRate
       });
     }
   } catch (error) {
@@ -744,6 +777,32 @@ exports.getEventTicketTypes = async (req, res) => {
     res.status(500).json({ 
       message: "Failed to fetch ticket types", 
       error: error.message 
+    });
+  }
+};
+
+// Get available currencies for payment gateways
+exports.getAvailableCurrencies = async (req, res) => {
+  try {
+    const currencies = {
+      wave: {
+        name: "Wave",
+        currencies: ["GMD"],
+        description: "Wave supports Gambian Dalasi (GMD) only"
+      },
+      stripe: {
+        name: "Stripe",
+        currencies: ["USD", "EUR", "GBP", "GMD"],
+        description: "Stripe supports USD, EUR, GBP directly. GMD will be converted to USD"
+      }
+    };
+
+    res.json(currencies);
+  } catch (error) {
+    console.error("Error fetching available currencies:", error);
+    res.status(500).json({
+      message: "Failed to fetch available currencies",
+      error: error.message
     });
   }
 };

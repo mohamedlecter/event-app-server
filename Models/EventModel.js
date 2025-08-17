@@ -11,6 +11,12 @@ const ticketTypeSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
+  currency: {
+    type: String,
+    required: true,
+    enum: ["USD", "XOF", "GMD", "EUR", "GBP"],
+    default: "GMD"
+  },
   quantity: {
     type: Number,
     required: true,
